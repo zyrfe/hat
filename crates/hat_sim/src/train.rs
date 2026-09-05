@@ -234,6 +234,7 @@ impl Train {
             c.knuckle_open.swap(0, 1);
             c.facing_head = !c.facing_head;
             c.no_couple_until.swap(0, 1);
+            c.no_couple_with.swap(0, 1);
         }
         self.zones.reverse();
         self.hoses.reverse();

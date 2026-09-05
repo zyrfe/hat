@@ -22,11 +22,12 @@ pub struct Rig {
     pub yaw: f32,
     pub pitch: f32,
     pub follow: bool,
+    pub seen_generation: Option<u32>,
 }
 
 impl Default for Rig {
     fn default() -> Self {
-        Rig { focus: Vec3::new(60.0, 0.0, -14.0), distance: 260.0, yaw: 0.0, pitch: 60f32.to_radians(), follow: false }
+        Rig { focus: Vec3::new(60.0, 0.0, -14.0), distance: 260.0, yaw: 0.0, pitch: 60f32.to_radians(), follow: false, seen_generation: None }
     }
 }
 
@@ -95,6 +96,18 @@ fn control(
     mut rig: ResMut<Rig>,
     mut cam: Single<&mut Transform, With<MainCamera>>,
 ) {
+    if rig.seen_generation != Some(sim.generation) {
+        rig.seen_generation = Some(sim.generation);
+        let lead = sim.world.graph.node(sim.yard.lead_switch).pos;
+        if sim.yard.hump.is_some() {
+            rig.focus = sim_to_world(lead + glam::DVec2::new(700.0, 30.0));
+            rig.distance = 1100.0;
+        } else {
+            rig.focus = sim_to_world(lead + glam::DVec2::new(160.0, 14.0));
+            rig.distance = 260.0;
+        }
+        rig.follow = false;
+    }
     let dt = time.delta_secs();
     let pan = rig.distance * 0.9 * dt;
     let (sy, cy) = rig.yaw.sin_cos();

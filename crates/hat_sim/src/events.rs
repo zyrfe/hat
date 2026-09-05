@@ -16,7 +16,7 @@ pub enum DerailCause {
 pub enum SimEvent {
     /// Slack ran out or a travel stop was hit between two coupled cars.
     CouplerImpact { pos: DVec2, rel_speed: f64, mass: f64 },
-    Coupled { pos: DVec2, rel_speed: f64, train: TrainId, hard: bool },
+    Coupled { pos: DVec2, rel_speed: f64, train: TrainId, hard: bool, a: CarId, b: CarId },
     Bumped { pos: DVec2, rel_speed: f64 },
     Uncoupled { pos: DVec2, train: TrainId, new_train: TrainId },
     KnuckleBreak { pos: DVec2, train: TrainId, new_train: TrainId },

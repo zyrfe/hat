@@ -46,6 +46,11 @@ pub const CONTACT_EPS: f64 = 0.02;
 pub const UNCOUPLE_GRACE: f64 = 2.0;
 /// Deeper than this is not a contact but two ends back to back.
 pub const MAX_PENETRATION: f64 = 0.5;
+/// Contact spring between touching, uncoupled ends: stiffness N/m and damping N·s/m.
+pub const CONTACT_K: f64 = 1.5e7;
+pub const CONTACT_C: f64 = 6.0e5;
+/// Penetration beyond which the much stiffer stop takes over.
+pub const CONTACT_STOP_AT: f64 = 0.05;
 
 // Resistance (modified Davis, SI form). R = m (A + B v) + C n_axles + D v² + m K curvature
 pub const DAVIS_A: f64 = 0.0045;
@@ -72,3 +77,6 @@ pub const V_EPS: f64 = 1e-3;
 
 /// Deceleration a retarder applies to a car above its release speed, m/s².
 pub const RETARDER_DECEL: f64 = 1.5;
+/// Within this distance of standing cars a retarder releases at the close speed instead.
+pub const RETARDER_CLOSE_GAP: f64 = 120.0;
+pub const RETARDER_CLOSE_SPEED: f64 = 1.6;

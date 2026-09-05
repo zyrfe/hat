@@ -66,7 +66,7 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Spline track with snapping, live radius and grade readout | M1 | wip | straight and arc edges, generator only |
 | Turnouts with frog number speed limits | M1 | done | |
 | Graph edges and nodes, occupancy | M1 | done | |
-| Free-rolling cars, grade, retarders | M1 | wip | rolling and grade done, retarders not |
+| Free-rolling cars, grade, retarders | M1 | done | |
 | Derailers and bumpers | M1 | wip | bumpers done |
 | Curve resistance | M1 | done | |
 | Superelevation | M2 | planned | |
@@ -95,9 +95,9 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 
 | Feature | Milestone | Status | Notes |
 |---|---|---|---|
-| Hump with retarders and bowl tracks | M1 | planned | |
+| Hump with retarders and bowl tracks | M1 | done | crest cut on the move, weight-and-distance retarders, bowl profile |
 | Flat switching: kick, shove to a joint | M1 | done | |
-| Receiving, classification, departure model | M4 | planned | |
+| Receiving, classification, departure model | M4 | done | terminal: receiving siding, bowl, departure track |
 | Doubling into short tracks | M4 | planned | |
 | Waybills and car routing | M4 | planned | |
 
@@ -105,9 +105,9 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 
 | Feature | Milestone | Status | Notes |
 |---|---|---|---|
-| Flood loader on loop track: speed band, fill rate | M4 | planned | |
+| Flood loader on loop track: speed band, fill rate | M4 | wip | loader track fills standing cars; a loop-track flood loader is the next step |
 | Rotary dumper with indexer | M4 | planned | |
-| Bottom-dump pit or trestle | M4 | planned | |
+| Bottom-dump pit or trestle | M4 | done | dumper track unloads standing cars |
 | Grain shuttle contracts with time window | M4 | planned | |
 | Intermodal pad with cuts | later | idea | |
 | Passenger: selective door operation, double stop | later | idea | |
@@ -134,7 +134,7 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Labor pools by skill, hiring, camps | M5 | planned | |
 | Fuel consumption and fueling | M5 | planned | |
 | Maintenance: tonnage degradation, tamping, rail replacement | M5 | planned | |
-| Rolling stock acquisition via interchange | M4 | planned | |
+| Rolling stock acquisition via interchange | M4 | done | portal on the main-line loop spawns and removes road trains |
 
 ## Presentation
 
@@ -161,17 +161,19 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Speed restriction lookahead: next limit, bumper or split switch ahead with distance | P0 | done | sim `lookahead` |
 | Derail and hard-coupling banners with cause | P0 | done | |
 | Engineer portrait with reactive mood and one-liners | P0 | done | placeholder for a crew model |
-| Crew executor: resumable maneuvers (route, move, couple, pull clear, shove, kick, cut, tie down) | M1 | done | route, drive, couple, pull clear, shove to joint, cut, tie down; kick later |
+| Crew executor: resumable maneuvers (route, move, couple, pull clear, shove, kick, cut, tie down) | M1 | done | plus hump cutting on the move, bleed, lace, charge; kick later |
 | Switch list orders and greedy block planner | M1 | done | per-car destinations editable in the selection panel |
 | Auto/manual override with plan panel and radio lines | M1 | done | touching a control pauses the crew |
 | Walking time and crew skill | M2 | idea | crew.md |
+| Dispatcher: road trains in and out through a portal, yard master assigning hump and sort jobs | M2 | done | traffic.rs; one road train at a time |
+| Terminal scenario runs unaided end to end as a test | M2 | done | inbound, hump, sort, load, unload, departure |
 | Asset manifest with placeholder flag and provenance; lineup sheet highlights placeholders | M1 | planned | art.md |
 | Normalization script: fit to sim box, flat facets, palette quantize, LODs | M1 | planned | Blender headless or Rust |
 | Placeholder mesh batch generation from a prompt list via hosted 3D generator | M1 | planned | |
 | Procedural audio synthesis as placeholder and fallback layer | M1 | done | |
 | Livery and reporting-mark generators | M2 | planned | |
 | Geometry-node kitbash generators for structures | M3 | planned | |
-| Yard and terminal layout generators | M4 | wip | ladder yard generator done |
+| Yard and terminal layout generators | M4 | done | ladder yard, terminal with loop, siding, hump and bowl |
 
 ## Platform
 

@@ -21,6 +21,9 @@ pub struct Score {
     pub complete: bool,
     pub points: i64,
     pub log: Vec<(f64, String)>,
+    /// Cars and payload that left on outbound trains (terminal scenarios).
+    pub cars_delivered: u32,
+    pub cargo_delivered: f64,
 }
 
 impl Score {
@@ -119,6 +122,7 @@ impl Score {
         pts -= 300 * self.bumper_hits as i64;
         pts -= (self.damage * 100.0) as i64;
         pts += 100 * self.cars_secured as i64;
+        pts += 100 * self.cars_delivered as i64 + (self.cargo_delivered / 500.0) as i64;
         self.points = pts;
     }
 }

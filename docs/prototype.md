@@ -21,6 +21,14 @@ no lateral motion, no rigid-body wrecks (derailed cars freeze tilted), no interp
 between sim steps, stepping is sequential. A GitHub Actions workflow for macOS and Windows
 is scaffolded but has not run yet because the project is not in git.
 
+## Beyond P0
+
+The Terminal scenario is the second world: a closed main-line loop with a portal where road
+trains appear and leave, a double-ended receiving siding, the flat ladder yard with a loader
+and a dumper track, and a hump with a four-track bowl. On Auto the crew and the dispatcher
+run the whole flow unaided; a headless test proves an inbound train is humped, sorted,
+loaded, unloaded and sent out as a departure. Take the levers whenever you like.
+
 ## The loop
 
 A small flat yard: a lead, a ladder of five or six body tracks of different lengths, a

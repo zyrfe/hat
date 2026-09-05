@@ -316,6 +316,12 @@ fn hud(
             crew_panel(ui, sim);
             ui.separator();
 
+            if sim.dispatcher.is_some() {
+                ui.heading("Traffic");
+                traffic_panel(ui, sim);
+                ui.separator();
+            }
+
             ui.heading("Selection");
             selection_panel(ui, sim, sel.sel, u);
             ui.separator();
@@ -529,5 +535,19 @@ fn crew_panel(ui: &mut egui::Ui, sim: &mut Sim) {
     }
     if resume {
         sim.resume_crew();
+    }
+}
+
+fn traffic_panel(ui: &mut egui::Ui, sim: &Sim) {
+    let Some(d) = sim.dispatcher.as_ref() else { return };
+    let t = sim.world.t;
+    ui.label(format!("Inbound {}  outbound {}  delivered {} cars, {:.0} t", d.inbound_count, d.outbound_count, d.cars_delivered, d.cargo_delivered / 1000.0));
+    ui.label(format!("Loaded {:.0} t   unloaded {:.0} t", sim.world.cargo_loaded / 1000.0, sim.world.cargo_unloaded / 1000.0));
+    match d.road.as_ref() {
+        Some(r) => ui.label(format!("Road crew: {}", r.describe())),
+        None => ui.label(format!("Next inbound in {}", uf::duration((d.next_inbound_at - t).max(0.0)))),
+    };
+    for (lt, line) in d.log.iter().rev().take(5) {
+        ui.small(format!("{} {line}", uf::duration(*lt)));
     }
 }

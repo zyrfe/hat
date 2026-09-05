@@ -71,6 +71,8 @@ pub struct Ladder {
 #[derive(Clone, Debug)]
 pub struct Hump {
     pub turnout: NodeId,
+    /// Approach end to crest.
+    pub climb: EdgeId,
     pub crest: NodeId,
     /// First edge past the crest, where a cut car is on its own.
     pub descent: EdgeId,
@@ -113,6 +115,11 @@ impl Yard {
 
     /// Switch settings that route a train from the ladder entry into `track`.
     pub fn route_to(&self, track: u32) -> Option<Vec<(NodeId, Route)>> {
+        if let Some((rt, wr, er)) = self.receiving {
+            if track == rt {
+                return Some(vec![(wr, Route::Diverging), (er, Route::Diverging)]);
+            }
+        }
         let t = self.track(track)?;
         let ladder = self.ladders.iter().find(|l| l.tracks.contains(&track))?;
         let mut out: Vec<(NodeId, Route)> = ladder.entry.into_iter().collect();

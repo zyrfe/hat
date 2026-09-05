@@ -65,7 +65,7 @@ pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Sim::load(0, 0))
+        app.insert_resource(Sim::load(2, 0))
             .add_systems(FixedUpdate, step_sim)
             .add_systems(Update, handle_reload);
     }
@@ -101,6 +101,10 @@ pub struct Sim {
     /// When true the crew drives; touching a control pauses it.
     pub auto: bool,
     pub manual_touch: bool,
+    /// Road traffic and the yard master, for terminal scenarios.
+    pub dispatcher: Option<Dispatcher>,
+    /// Events from the most recent sim step, fed to the dispatcher on the next.
+    pub last_events: Vec<SimEvent>,
 }
 
 impl Sim {
@@ -108,8 +112,9 @@ impl Sim {
         let scenarios = all_scenarios();
         let scenario_index = index % scenarios.len();
         let scenario = scenarios[scenario_index].clone();
-        let Built { world, yard, loco, .. } = build(&scenario);
+        let Built { world, yard, loco, dispatcher, initial_program, .. } = build(&scenario);
         let controls = world.train(loco).map(|t| t.controls.clone()).unwrap_or_default();
+        let auto = scenario.kind == ScenarioKind::Terminal;
         let mut s = Sim {
             world,
             yard,
@@ -129,12 +134,14 @@ impl Sim {
             ahead: None,
             cur_limit: None,
             crew: None,
-            auto: false,
+            auto,
             manual_touch: false,
+            dispatcher,
+            last_events: Vec::new(),
         };
         let loco_car = s.world.train(loco).map(|t| t.cars[0].id);
         if let Some(car) = loco_car {
-            s.crew = Some(Crew::new("R. Casey", car, Program::Sort { yard: s.yard.clone(), phase: SortPhase::Start }, 0.0));
+            s.crew = Some(Crew::new("R. Casey", car, initial_program, 0.0));
         }
         s.rebuild_index();
         s.score.evaluate(&s.world, &s.yard, s.scenario.time_budget);
@@ -360,14 +367,22 @@ fn step_sim(mut sim: ResMut<Sim>) {
         sim.apply_controls();
     }
     let n = sim.time_scale;
+    let mut events: Vec<SimEvent> = Vec::new();
     for _ in 0..n {
-        if crew_drives {
-            let Sim { crew, world, .. } = &mut *sim;
-            if let Some(c) = crew.as_mut() {
-                c.step(world, DT);
+        {
+            let Sim { crew, world, dispatcher, last_events, .. } = &mut *sim;
+            if let (Some(d), Some(c)) = (dispatcher.as_mut(), crew.as_mut()) {
+                d.step(world, c, last_events, DT);
             }
+            if crew_drives {
+                if let Some(c) = crew.as_mut() {
+                    c.step(world, DT);
+                }
+            }
+            world.step(DT);
+            *last_events = world.take_events();
+            events.extend(last_events.iter().cloned());
         }
-        sim.world.step(DT);
     }
     if crew_drives {
         sim.adopt_train_controls();
@@ -379,7 +394,6 @@ fn step_sim(mut sim: ResMut<Sim>) {
             }
         }
     }
-    let events = sim.world.take_events();
     let t = sim.world.t;
     let frame_changed = events.iter().any(|e| matches!(e, SimEvent::Coupled { .. } | SimEvent::Uncoupled { .. } | SimEvent::KnuckleBreak { .. }));
     {
@@ -398,7 +412,11 @@ fn step_sim(mut sim: ResMut<Sim>) {
     update_lookahead(&mut sim, t);
     if t - sim.last_eval >= 0.5 {
         {
-            let Sim { score, world, yard, scenario, .. } = &mut *sim;
+            let Sim { score, world, yard, scenario, dispatcher, .. } = &mut *sim;
+            if let Some(d) = dispatcher.as_ref() {
+                score.cars_delivered = d.cars_delivered;
+                score.cargo_delivered = d.cargo_delivered;
+            }
             score.evaluate(world, yard, scenario.time_budget);
         }
         sim.last_eval = t;

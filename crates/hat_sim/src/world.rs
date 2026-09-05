@@ -1,5 +1,6 @@
 //! The simulation world: track graph, trains, stepping, contacts and crew actions.
 
+use glam::DVec2;
 use hat_units::G;
 
 use crate::car::*;
@@ -8,6 +9,11 @@ use crate::params::*;
 use crate::track::*;
 use crate::train::*;
 use crate::TrainId;
+
+/// Debug: print the force balance of this car id every step (-1 for none).
+pub static DEBUG_CAR: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+/// Debug: print every contact decision.
+pub static DEBUG_CONTACTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub struct World {
     pub graph: TrackGraph,
@@ -31,14 +37,15 @@ struct Face {
     car: usize,
     edge: EdgeId,
     s: f64,
-    forward: bool,
     /// +1 or -1 along `s`, pointing out of the train.
     out_dir: f64,
     /// Face velocity along its outward direction.
     v_out: f64,
     knuckle_open: bool,
     derailed: bool,
-    mass: f64,
+    car_id: CarId,
+    /// Car this end will not re-couple with until they separate.
+    excl: Option<CarId>,
 }
 
 impl World {
@@ -249,9 +256,12 @@ impl World {
         t2.hoses = tail_hoses;
         t2.derailed = train.derailed;
         let grace = self.t + UNCOUPLE_GRACE;
+        let parted_from_head = t2.cars[0].id;
         if let Some(c) = train.cars.last_mut() {
             c.knuckle_open[1] = true;
             c.no_couple_until[1] = grace;
+            c.no_couple_with[1] = Some(parted_from_head);
+            t2.cars[0].no_couple_with[0] = Some(c.id);
         }
         t2.cars[0].knuckle_open[0] = true;
         t2.cars[0].no_couple_until[0] = grace;
@@ -278,16 +288,52 @@ impl World {
     /// Advance the world by `dt` seconds.
     pub fn step(&mut self, dt: f64) {
         let mut breaks: Vec<(TrainId, usize)> = Vec::new();
+        // Ends that touch push on each other through a compression-only contact spring, so a
+        // locomotive can shove loose cars (kicks, humps) and two cuts bump apart honestly.
+        let mut extra: Vec<Vec<(usize, f64)>> = vec![Vec::new(); self.trains.len()];
+        let contacts = self.find_contacts();
+        self.clear_separated_exclusions();
+        for (a, b, gap, closing) in contacts {
+            let pen = (-gap).max(0.0);
+            if pen <= 0.0 && closing <= 0.0 {
+                continue;
+            }
+            let mut force = CONTACT_K * pen + CONTACT_C * closing.max(0.0);
+            if pen > CONTACT_STOP_AT {
+                force += STOP_K * (pen - CONTACT_STOP_AT);
+            }
+            let force = force.max(0.0);
+            // Push each car away from its contact face.
+            let fa = if a.end == End::Head { -force } else { force };
+            let fb = if b.end == End::Head { -force } else { force };
+            extra[a.train].push((a.car, fa));
+            extra[b.train].push((b.car, fb));
+        }
+        // Gap to the next train ahead of each moving train, for weight-and-distance retarders.
+        let gaps: Vec<Option<f64>> = self
+            .trains
+            .iter()
+            .map(|tr| {
+                if tr.derailed || tr.cars.is_empty() {
+                    return None;
+                }
+                let v = tr.cars[0].v;
+                if v.abs() < 0.05 {
+                    return None;
+                }
+                self.distance_to_train_ahead(tr, v > 0.0, 400.0).map(|(d, _)| d)
+            })
+            .collect();
         {
             let World { graph, car_types, trains, events, t, .. } = self;
-            for train in trains.iter_mut() {
+            for (ti, train) in trains.iter_mut().enumerate() {
                 if train.derailed {
                     for c in &mut train.cars {
                         c.v = 0.0;
                     }
                     continue;
                 }
-                step_train(train, graph, car_types, *t, dt, events, &mut breaks);
+                step_train(train, graph, car_types, *t, dt, events, &mut breaks, &extra[ti], gaps[ti]);
             }
         }
         self.process_facilities(dt);
@@ -322,12 +368,12 @@ impl World {
                     car: 0,
                     edge: l.edge,
                     s: l.s,
-                    forward: l.forward,
                     out_dir: if l.forward { 1.0 } else { -1.0 },
                     v_out: c.v,
                     knuckle_open: c.knuckle_open[0] && self.t >= c.no_couple_until[0],
                     derailed: tr.derailed,
-                    mass: c.mass(&types[c.type_id as usize]),
+                    car_id: c.id,
+                    excl: c.no_couple_with[0],
                 });
             }
             if let Some(l) = tr.locate(graph, tr.tail_face_x(types)) {
@@ -338,39 +384,79 @@ impl World {
                     car: n - 1,
                     edge: l.edge,
                     s: l.s,
-                    forward: l.forward,
                     out_dir: if l.forward { -1.0 } else { 1.0 },
                     v_out: -c.v,
                     knuckle_open: c.knuckle_open[1] && self.t >= c.no_couple_until[1],
                     derailed: tr.derailed,
-                    mass: c.mass(&types[c.type_id as usize]),
+                    car_id: c.id,
+                    excl: c.no_couple_with[1],
                 });
             }
         }
         faces
     }
 
-    fn resolve_contacts(&mut self) {
-        for _ in 0..64 {
-            let faces = self.collect_faces();
-            let mut found = None;
-            'search: for i in 0..faces.len() {
-                for j in (i + 1)..faces.len() {
-                    let (a, b) = (faces[i], faces[j]);
-                    if a.train == b.train || a.edge != b.edge || a.out_dir == b.out_dir {
-                        continue;
-                    }
-                    if a.derailed && b.derailed {
-                        continue;
-                    }
-                    let gap = (b.s - a.s) * a.out_dir;
-                    let closing = a.v_out + b.v_out;
-                    if gap <= CONTACT_EPS && gap >= -MAX_PENETRATION && (closing > 0.0 || gap < -1e-6) {
-                        found = Some((a, b, gap, closing));
-                        break 'search;
+    /// A parted pair may couple again once the two cars have actually moved apart.
+    fn clear_separated_exclusions(&mut self) {
+        use std::collections::{HashMap, HashSet};
+        let partners: HashSet<CarId> = self.trains.iter().flat_map(|t| t.cars.iter().flat_map(|c| c.no_couple_with.iter().flatten().copied())).collect();
+        if partners.is_empty() {
+            return;
+        }
+        let types = &self.car_types;
+        let mut pos: HashMap<CarId, (DVec2, f64)> = HashMap::new();
+        for tr in &self.trains {
+            for (i, c) in tr.cars.iter().enumerate() {
+                if partners.contains(&c.id) || c.no_couple_with.iter().any(|x| x.is_some()) {
+                    if let Some(p) = self.car_pose(tr, i) {
+                        pos.insert(c.id, (p.pos, types[c.type_id as usize].length));
                     }
                 }
             }
+        }
+        for tr in &mut self.trains {
+            for c in &mut tr.cars {
+                for end in 0..2 {
+                    if let Some(p) = c.no_couple_with[end] {
+                        let apart = match (pos.get(&c.id), pos.get(&p)) {
+                            (Some((pa, la)), Some((pb, lb))) => pa.distance(*pb) > 0.5 * (la + lb) + 5.0,
+                            _ => true,
+                        };
+                        if apart {
+                            c.no_couple_with[end] = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pairs of train ends that touch, with the gap between faces and their closing speed.
+    fn find_contacts(&self) -> Vec<(Face, Face, f64, f64)> {
+        let faces = self.collect_faces();
+        let mut out = Vec::new();
+        for i in 0..faces.len() {
+            for j in (i + 1)..faces.len() {
+                let (a, b) = (faces[i], faces[j]);
+                if a.train == b.train || a.edge != b.edge || a.out_dir == b.out_dir {
+                    continue;
+                }
+                if a.derailed && b.derailed {
+                    continue;
+                }
+                let gap = (b.s - a.s) * a.out_dir;
+                let closing = a.v_out + b.v_out;
+                if gap <= CONTACT_EPS && gap >= -MAX_PENETRATION {
+                    out.push((a, b, gap, closing));
+                }
+            }
+        }
+        out
+    }
+
+    fn resolve_contacts(&mut self) {
+        for _ in 0..64 {
+            let found = self.find_contacts().into_iter().find(|(_, _, gap, closing)| *gap <= CONTACT_EPS && (*closing > 0.0 || *gap < -1e-6));
             let Some((a, b, gap, closing)) = found else { return };
             let rel = closing.max(0.0);
             if rel > COLLISION_DERAIL_SPEED {
@@ -385,10 +471,16 @@ impl World {
                 }
                 continue;
             }
-            if (a.knuckle_open || b.knuckle_open) && rel >= MIN_COUPLE_SPEED {
+            let excluded = a.excl == Some(b.car_id) || b.excl == Some(a.car_id);
+            if DEBUG_CONTACTS.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("    [contact t={:.2}] car {} ({:?}, open={}, excl={:?}) vs car {} ({:?}, open={}, excl={:?}) gap={:+.4} closing={:+.3} -> {}", self.t, a.car_id, a.end, a.knuckle_open, a.excl, b.car_id, b.end, b.knuckle_open, b.excl, gap, closing, if (a.knuckle_open || b.knuckle_open) && !excluded && rel >= MIN_COUPLE_SPEED { "COUPLE" } else { "bump" });
+            }
+            if (a.knuckle_open || b.knuckle_open) && !excluded && rel >= MIN_COUPLE_SPEED {
                 self.couple(a, b, rel);
             } else {
                 self.bump(a, b, gap, rel);
+                // A bump is settled by the contact spring over the next steps; stop scanning.
+                return;
             }
         }
     }
@@ -470,23 +562,14 @@ impl World {
         }
         atrain.derailed |= btrain.derailed;
         atrain.retract(graph, types);
-        events.push(SimEvent::Coupled { pos, rel_speed: rel, train: atrain.id, hard });
+        events.push(SimEvent::Coupled { pos, rel_speed: rel, train: atrain.id, hard, a: a.car_id, b: b.car_id });
     }
 
-    /// Two closed knuckles meet: exchange momentum, separate, no join.
+    /// Two ends touch without coupling. The contact spring does the pushing; here we only
+    /// report the impact and guard against deep penetration.
     fn bump(&mut self, a: Face, b: Face, gap: f64, rel: f64) {
         let World { graph, car_types: types, trains, events, .. } = self;
-        let sa = if a.forward { 1.0 } else { -1.0 };
-        let sb = if b.forward { 1.0 } else { -1.0 };
-        let va = trains[a.train].cars[a.car].v * sa;
-        let vb = trains[b.train].cars[b.car].v * sb;
-        let (ma, mb) = (a.mass, b.mass);
-        let e = BUMP_RESTITUTION;
-        let va2 = (ma * va + mb * vb - mb * e * (va - vb)) / (ma + mb);
-        let vb2 = (ma * va + mb * vb + ma * e * (va - vb)) / (ma + mb);
-        trains[a.train].cars[a.car].v = va2 * sa;
-        trains[b.train].cars[b.car].v = vb2 * sb;
-        if gap < 0.0 {
+        if gap < -MAX_PENETRATION * 0.5 {
             let mover = if b.derailed { a } else { b };
             let dir = if mover.end == End::Head { -1.0 } else { 1.0 };
             let tr = &mut trains[mover.train];
@@ -497,13 +580,15 @@ impl World {
             let _ = tr.extend_tail(graph, types);
             tr.retract(graph, types);
         }
-        if rel > COUPLE_MAX_SPEED {
-            let d = 0.5 * (rel - COUPLE_MAX_SPEED);
-            trains[a.train].cars[a.car].damage += d;
-            trains[b.train].cars[b.car].damage += d;
+        if rel > 0.1 {
+            if rel > COUPLE_MAX_SPEED {
+                let d = 0.5 * (rel - COUPLE_MAX_SPEED);
+                trains[a.train].cars[a.car].damage += d;
+                trains[b.train].cars[b.car].damage += d;
+            }
+            let pos = graph.pose_on_edge(a.edge, a.s).pos;
+            events.push(SimEvent::Bumped { pos, rel_speed: rel });
         }
-        let pos = graph.pose_on_edge(a.edge, a.s).pos;
-        events.push(SimEvent::Bumped { pos, rel_speed: rel });
     }
 
     /// Trains occupying the same stretch of an edge have collided side-on or run through.
@@ -592,7 +677,7 @@ fn derail_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], car_id
 }
 
 /// Force through one coupler pair, positive in tension, and the zone it is in.
-fn coupler_force(e: f64, de: f64) -> (f64, Zone) {
+pub fn coupler_force(e: f64, de: f64) -> (f64, Zone) {
     if e > SLACK_HALF {
         let d = e - SLACK_HALF;
         let mut f = DRAFT_GEAR_K * d + DRAFT_GEAR_C * de;
@@ -613,7 +698,7 @@ fn coupler_force(e: f64, de: f64) -> (f64, Zone) {
 }
 
 /// One fixed step for one train: couplers, forces, integration, brakes, path ends.
-fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, dt: f64, events: &mut Vec<SimEvent>, breaks: &mut Vec<(TrainId, usize)>) {
+fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, dt: f64, events: &mut Vec<SimEvent>, breaks: &mut Vec<(TrainId, usize)>, extra: &[(usize, f64)], gap_ahead: Option<f64>) {
     let n = train.cars.len();
     let ctrl = train.control_car(types);
 
@@ -633,6 +718,11 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
         train.zones[k - 1] = zone;
         if fc > KNUCKLE_BREAK {
             breaks.push((train.id, k));
+        }
+    }
+    for &(i, force) in extra {
+        if i < n {
+            f[i] += force;
         }
     }
 
@@ -671,13 +761,20 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
         let hb = car.hand_brake * HAND_BRAKE_RATIO * m * G;
         let retard = match retarder {
             Some(vt) => {
-                let target = if car.m_payload < 10_000.0 { vt + 1.0 } else { vt };
+                // Weight-responsive, and slower still when the standing cars are close.
+                let mut target = if car.m_payload < 10_000.0 { vt + 1.0 } else { vt };
+                if let Some(gap) = gap_ahead {
+                    if gap < RETARDER_CLOSE_GAP {
+                        target = target.min(RETARDER_CLOSE_SPEED);
+                    }
+                }
                 if vabs > target { m * RETARDER_DECEL } else { 0.0 }
             }
             None => 0.0,
         };
         let fric = rolling + air + hb + ind + retard;
         let fric_static = STARTING_RESISTANCE_FACTOR * (m * DAVIS_A + DAVIS_C * axles) + air + hb + ind;
+        let v_before = car.v;
         if vabs < V_EPS {
             if drive.abs() <= fric_static {
                 car.v = 0.0;
@@ -688,6 +785,9 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
             let s = car.v.signum();
             let vn = car.v + (drive - fric * s) / m * dt;
             car.v = if vn * car.v < 0.0 { 0.0 } else { vn };
+        }
+        if DEBUG_CAR.load(std::sync::atomic::Ordering::Relaxed) == car.id as i64 {
+            eprintln!("    [sim car {}] f={:+.0} grade={:+.4} m={:.0} drive={:+.0} fric={:.0} fric_static={:.0} retard={:.0} v {:+.5} -> {:+.5} loc={:?}", car.id, f[i], grade, m, drive, fric, fric_static, retard, v_before, car.v, locs[i].map(|l| (l.edge, l.s, l.forward)));
         }
         if curv > 0.0 && car.v.abs() > OVERSPEED_DERAIL_FACTOR * limit && overspeed.is_none() {
             overspeed = Some(i);

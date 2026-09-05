@@ -64,8 +64,11 @@ crews and engines make this the dispatching game.
 First version built 2026-09-05. The Sort program couples to the standing cut, releases hand
 brakes, then delivers trailing blocks by pulling clear of the lead, lining the ladder and
 shoving to a joint 20 m inside the track, tying down and cutting. Unaided it finishes the
-Yard Shift in about 73 minutes of sim time with one hard joint, which is par for now. Kicks,
-digging and multi-crew traffic are not in yet.
+Yard Shift in about 74 minutes of sim time with no hard joints, which is par for now. A Hump
+program bleeds the receiving cut, shoves it to the crest and cuts each car on the move so its
+momentum carries it over, spacing cuts until the previous car is off the hump. Road crews
+bring trains in through the portal and take departures out. A dispatcher hands the yard crew
+its next job. Kicks, digging and more than one road train at a time are not in yet.
 
 ## Build order
 

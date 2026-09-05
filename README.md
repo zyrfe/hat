@@ -3,8 +3,9 @@
 An overhead rail-network game about stupidly long trains, honest yard work,
 real logistics and engineering trade-offs. Rust on Bevy.
 
-Design docs live in `docs/`. Code is a Cargo workspace under `crates/`: the P0 Yard Shift
-prototype is playable.
+Design docs live in `docs/`. Code is a Cargo workspace under `crates/`. Three scenarios are
+playable: Yard Shift, Doubling, and the Terminal with its main-line loop, hump and road
+traffic, which is the default.
 
 
 ## Docs

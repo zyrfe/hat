@@ -135,6 +135,9 @@ pub struct CarState {
     pub facing_head: bool,
     /// Sim time before which each end refuses to couple, set by a pin pull. [head end, tail end]
     pub no_couple_until: [f64; 2],
+    /// The car each end was just parted from. That pair will not re-couple until they have
+    /// actually separated, so a loose car can be shoved without re-locking the knuckle.
+    pub no_couple_with: [Option<CarId>; 2],
 }
 
 impl CarState {
@@ -154,6 +157,7 @@ impl CarState {
             dest: None,
             facing_head: true,
             no_couple_until: [0.0, 0.0],
+            no_couple_with: [None, None],
         }
     }
 

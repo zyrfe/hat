@@ -2,6 +2,9 @@
 
 use hat_sim::*;
 
+use crate::crew::*;
+use crate::terminal::*;
+use crate::traffic::Dispatcher;
 use crate::yard::*;
 
 #[derive(Clone, Debug)]
@@ -19,6 +22,8 @@ pub enum ScenarioKind {
     Sort,
     /// Double a charged road train into the yard.
     Double,
+    /// The terminal: road trains in and out, hump, loader and dumper.
+    Terminal,
 }
 
 #[derive(Clone, Debug)]
@@ -130,8 +135,22 @@ pub fn doubling() -> Scenario {
     }
 }
 
+pub fn terminal() -> Scenario {
+    Scenario {
+        name: "Terminal",
+        kind: ScenarioKind::Terminal,
+        description: "Road trains arrive through the portal every ninety minutes. Hump them, spot empties at the loader and loads at the dumper, build departures on Track 1. The crew can do all of it on Auto.",
+        yard: YardParams::default(),
+        inbound: Vec::new(),
+        inbound_tail_offset: 0.0,
+        loco_offset: 0.0,
+        inbound_charged: true,
+        time_budget: 8.0 * 3600.0,
+    }
+}
+
 pub fn all_scenarios() -> Vec<Scenario> {
-    vec![yard_shift(), doubling()]
+    vec![yard_shift(), doubling(), terminal()]
 }
 
 /// The built world plus what the app needs to know about it.
@@ -139,10 +158,33 @@ pub struct Built {
     pub world: World,
     pub yard: Yard,
     pub loco: TrainId,
-    pub inbound: TrainId,
+    pub inbound: Option<TrainId>,
+    pub dispatcher: Option<Dispatcher>,
+    /// What the yard crew starts doing on Auto.
+    pub initial_program: Program,
+}
+
+fn build_terminal_scenario() -> Built {
+    let (graph, yard) = build_terminal(&TerminalParams::default());
+    let mut world = World::new(graph);
+    let hump = yard.hump.clone().expect("terminal has a hump");
+    // The switcher waits on the hump approach, clear of the crest.
+    let approach = world.graph.edge(hump.climb).a;
+    let approach_edge = world.graph.node(approach).edges.iter().copied().find(|&e| e != hump.climb && world.graph.edge(e).track == Some(TRACK_HUMP)).expect("approach edge");
+    let mut l = world.new_car(TYPE_SWITCHER);
+    l.brake = Brake::charged();
+    l.knuckle_open = [true, true];
+    let len = world.graph.edge(approach_edge).length;
+    let loco = world.spawn_train(vec![l], approach_edge, len - 60.0, true).expect("switcher fits on the approach");
+    world.set_controls(loco, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
+    let dispatcher = Dispatcher::new(yard.clone());
+    Built { world, yard, loco, inbound: None, dispatcher: Some(dispatcher), initial_program: Program::Idle }
 }
 
 pub fn build(sc: &Scenario) -> Built {
+    if sc.kind == ScenarioKind::Terminal {
+        return build_terminal_scenario();
+    }
     let (graph, yard) = build_ladder_yard(&sc.yard);
     let mut world = World::new(graph);
 
@@ -174,7 +216,8 @@ pub fn build(sc: &Scenario) -> Built {
     let loco = world.spawn_train(vec![l], yard.main_west, west_len - sc.loco_offset, true).expect("locomotive fits on the west main");
     world.set_controls(loco, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
 
-    Built { world, yard, loco, inbound }
+    let initial_program = Crew::sort_job(&yard, None);
+    Built { world, yard, loco, inbound: Some(inbound), dispatcher: None, initial_program }
 }
 
 #[cfg(test)]
@@ -185,8 +228,13 @@ mod tests {
     fn scenarios_build_and_fit() {
         for sc in all_scenarios() {
             let b = build(&sc);
+            if sc.kind == ScenarioKind::Terminal {
+                assert_eq!(b.world.trains.len(), 1);
+                assert!(b.dispatcher.is_some());
+                continue;
+            }
             assert_eq!(b.world.trains.len(), 2, "{}", sc.name);
-            let inbound = b.world.train(b.inbound).unwrap();
+            let inbound = b.world.train(b.inbound.unwrap()).unwrap();
             assert_eq!(inbound.cars.len(), sc.inbound.len());
             let loco = b.world.train(b.loco).unwrap();
             assert!(b.world.car_types[loco.cars[0].type_id as usize].is_loco());
@@ -236,7 +284,8 @@ mod playthrough {
     #[test]
     fn crew_couples_pulls_clear_and_kicks_a_car_into_track_one() {
         let sc = yard_shift();
-        let Built { mut world, yard, loco, inbound } = build(&sc);
+        let Built { mut world, yard, loco, inbound, .. } = build(&sc);
+        let inbound = inbound.unwrap();
 
         // 1. Ease east onto the cut and couple under 1.8 m/s.
         let mut coupled = false;

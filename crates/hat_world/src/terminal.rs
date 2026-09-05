@@ -64,6 +64,8 @@ struct LadderSpec {
     body_end_x: f64,
     retarder: Option<f64>,
     body_grade: f64,
+    /// Bowl profile: after this many meters the grade changes to the second value.
+    second_grade: Option<(f64, f64)>,
 }
 
 /// Build a ladder starting with a left-turning lead arc at `from` (a node with `from_pose`).
@@ -96,11 +98,23 @@ fn attach_ladder(g: &mut TrackGraph, from: NodeId, from_pose: Pose, p: &Terminal
             g.edges[arc_e as usize].retarder = Some(v);
         }
         let end_pos = DVec2::new(spec.body_end_x, b_pose.pos.y);
-        let straight = Geometry::Straight { a: b_pose.pos, b: end_pos };
-        let length = straight.length();
-        let e = g.add_node_z(end_pos, base_z + spec.body_grade * length, NodeKind::End, format!("{} bumper", (spec.names)(id)));
-        let straight_e = g.add_edge_graded(b, e, straight, p.yard_speed, Some(id));
-        YardTrack { id, name: (spec.names)(id), edges: vec![arc_e, straight_e], length, entry }
+        let total = (end_pos - b_pose.pos).length();
+        let mut edges = vec![arc_e];
+        match spec.second_grade {
+            Some((split, g2)) if split < total - 20.0 => {
+                let mid_pos = b_pose.pos + DVec2::new(split, 0.0);
+                let z_mid = base_z + spec.body_grade * split;
+                let mid = g.add_node_z(mid_pos, z_mid, NodeKind::Plain, format!("{} mid", (spec.names)(id)));
+                edges.push(g.add_edge_graded(b, mid, Geometry::Straight { a: b_pose.pos, b: mid_pos }, p.yard_speed, Some(id)));
+                let e = g.add_node_z(end_pos, z_mid + g2 * (total - split), NodeKind::End, format!("{} bumper", (spec.names)(id)));
+                edges.push(g.add_edge_graded(mid, e, Geometry::Straight { a: mid_pos, b: end_pos }, p.yard_speed, Some(id)));
+            }
+            _ => {
+                let e = g.add_node_z(end_pos, base_z + spec.body_grade * total, NodeKind::End, format!("{} bumper", (spec.names)(id)));
+                edges.push(g.add_edge_graded(b, e, Geometry::Straight { a: b_pose.pos, b: end_pos }, p.yard_speed, Some(id)));
+            }
+        }
+        YardTrack { id, name: (spec.names)(id), edges, length: total, entry }
     };
 
     for k in 1..=spec.n_turnouts {
@@ -194,7 +208,7 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
     let receiving_len = g.edge(r_straight).length;
 
     // Flat yard off T0, tracks 1..=flat_tracks, ending at x = 600.
-    let flat_spec = LadderSpec { track_base: 0, names: |id| format!("Track {id}"), n_turnouts: p.flat_tracks - 1, body_end_x: 600.0, retarder: None, body_grade: 0.0 };
+    let flat_spec = LadderSpec { track_base: 0, names: |id| format!("Track {id}"), n_turnouts: p.flat_tracks - 1, body_end_x: 600.0, retarder: None, body_grade: 0.0, second_grade: None };
     let (mut flat_ladder, mut flat_tracks, lead_edges, flat_lead_arc) = attach_ladder(&mut g, t0, east(-100.0, 0.0), p, &flat_spec);
     flat_ladder.entry = Some((t0, Route::Diverging));
     g.set_turnout(t0, main_w2, main_e0, flat_lead_arc);
@@ -220,7 +234,7 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
     g.add_edge(h0, h1, Geometry::Straight { a: h0_pose.pos, b: approach_end }, 0.0, p.yard_speed, Some(TRACK_HUMP));
     let crest_pos = DVec2::new(1270.0, y_h);
     let crest = g.add_node_z(crest_pos, 2.4, NodeKind::Plain, "Crest");
-    g.add_edge_graded(h1, crest, Geometry::Straight { a: approach_end, b: crest_pos }, p.yard_speed, Some(TRACK_HUMP));
+    let climb = g.add_edge_graded(h1, crest, Geometry::Straight { a: approach_end, b: crest_pos }, p.yard_speed, Some(TRACK_HUMP));
     let foot_pos = DVec2::new(1330.0, y_h);
     let foot = g.add_node_z(foot_pos, 0.0, NodeKind::Plain, "Hump foot");
     let descent = g.add_edge_graded(crest, foot, Geometry::Straight { a: crest_pos, b: foot_pos }, p.yard_speed, Some(TRACK_HUMP));
@@ -228,8 +242,9 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
     let b0 = g.add_node(b0_pos, NodeKind::Plain, "Bowl lead");
     g.add_edge(foot, b0, Geometry::Straight { a: foot_pos, b: b0_pos }, 0.0, p.yard_speed, Some(TRACK_HUMP));
     g.set_turnout(thump, main_e0, main_e1, hump_in[0]);
-    let bowl_spec = LadderSpec { track_base: BOWL_BASE, names: |id| format!("Bowl {}", id - BOWL_BASE), n_turnouts: p.bowl_tracks - 1, body_end_x: 2100.0, retarder: Some(1.4), body_grade: -0.001 };
-    let (bowl_ladder, bowl_tracks, _bowl_lead, _) = attach_ladder(&mut g, b0, Pose::new(b0_pos.x, b0_pos.y, 0.0), p, &bowl_spec);
+    let bowl_spec = LadderSpec { track_base: BOWL_BASE, names: |id| format!("Bowl {}", id - BOWL_BASE), n_turnouts: p.bowl_tracks - 1, body_end_x: 2100.0, retarder: Some(1.5), body_grade: -0.001, second_grade: Some((260.0, 0.0006)) };
+    let (mut bowl_ladder, bowl_tracks, _bowl_lead, _) = attach_ladder(&mut g, b0, Pose::new(b0_pos.x, b0_pos.y, 0.0), p, &bowl_spec);
+    bowl_ladder.entry = Some((thump, Route::Diverging));
 
     let mut tracks = flat_tracks;
     tracks.extend(bowl_tracks);
@@ -247,7 +262,7 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
         max: DVec2::new(h + r + 20.0, ytop + 20.0),
         portal: Some(p_w),
         receiving: Some((TRACK_RECEIVING, wr, er)),
-        hump: Some(Hump { turnout: thump, crest, descent, bowl: 1 }),
+        hump: Some(Hump { turnout: thump, climb, crest, descent, bowl: 1 }),
         departure: Some(TRACK_DEPARTURE),
     };
     let _ = portal_edge;
@@ -438,5 +453,129 @@ mod tests {
         assert_eq!(car.commodity, Commodity::Coal);
         assert!(w.events.iter().any(|e| matches!(e, SimEvent::Loaded { .. })));
         assert!(w.cargo_loaded > 90_000.0);
+    }
+}
+
+#[cfg(test)]
+mod climb_tests {
+    use super::*;
+
+    /// A switcher shoving a mixed twenty-car cut up the hump climb must keep moving.
+    #[test]
+    fn switcher_pushes_twenty_cars_up_the_climb() {
+        let (g, yard) = build_terminal(&TerminalParams::default());
+        let mut w = World::new(g);
+        let hump = yard.hump.clone().unwrap();
+        let mut cars = Vec::new();
+        for i in 0..20 {
+            let (ty, payload) = match i % 5 {
+                0 | 1 => (TYPE_OPEN_HOPPER, 100_000.0),
+                2 => (TYPE_BOXCAR, 30_000.0),
+                3 => (TYPE_GONDOLA, 80_000.0),
+                _ => (TYPE_OPEN_HOPPER, 0.0),
+            };
+            let mut c = w.new_car(ty);
+            c.m_payload = payload;
+            cars.push(c);
+        }
+        let mut l = w.new_car(TYPE_SWITCHER);
+        l.brake = Brake::charged();
+        cars.push(l);
+        // Head car on the climb, 100 m up it.
+        let id = w.spawn_train(cars, hump.climb, 108.0, true).unwrap();
+        let mass = w.train(id).unwrap().total_mass(&w.car_types);
+        w.set_controls(id, Controls { throttle: 8, reverser: Reverser::Forward, independent: 0.0, ..Default::default() });
+        let mut vmax = 0.0f64;
+        let mut trace = Vec::new();
+        for i in 0..(40.0 / DT) as usize {
+            w.step(DT);
+            let tr = w.train(id).unwrap();
+            let v = tr.speed(&w.car_types);
+            vmax = vmax.max(v);
+            if i % 240 == 0 {
+                trace.push(format!("t={:>4.1} loco v={:+.3} head v={:+.3} head s={:.1} zone0={:?}", w.t, v, tr.cars[0].v, w.car_location(tr, 0).map(|l| l.s).unwrap_or(-1.0), tr.zones[0]));
+            }
+        }
+        for l in &trace {
+            eprintln!("{l}");
+        }
+        eprintln!("mass {:.0} t, vmax {:.3}", mass / 1000.0, vmax);
+        assert!(vmax > 0.3, "the cut should climb, vmax {vmax}");
+    }
+}
+
+#[cfg(test)]
+mod hump_push_tests {
+    use super::*;
+
+    /// After a crest cut, the next shove pushes the loose car over without re-coupling.
+    #[test]
+    fn shoving_a_cut_car_over_the_crest_does_not_recouple() {
+        let (g, yard) = build_terminal(&TerminalParams::default());
+        let mut w = World::new(g);
+        let hump = yard.hump.clone().unwrap();
+        for (node, route) in yard.route_to(12).unwrap() {
+            w.graph.set_route(node, route);
+        }
+        let mut cars = Vec::new();
+        for _ in 0..3 {
+            let mut c = w.new_car(TYPE_GONDOLA);
+            c.m_payload = 80_000.0;
+            c.knuckle_open = [true, true];
+            cars.push(c);
+        }
+        let mut l = w.new_car(TYPE_SWITCHER);
+        l.brake = Brake::charged();
+        cars.push(l);
+        // Lead car centre 16 m short of the crest, as the crew leaves it.
+        let climb = w.graph.edge(hump.climb);
+        let lead_len = w.car_types[TYPE_GONDOLA as usize].length;
+        let id = w.spawn_train(cars, hump.climb, climb.length - 16.0 + lead_len / 2.0, true).unwrap();
+        w.set_controls(id, Controls { throttle: 0, reverser: Reverser::Neutral, independent: 1.0, ..Default::default() });
+        for _ in 0..(3.0 / DT) as usize {
+            w.step(DT);
+        }
+        let e = w.train(id).unwrap().coupler_extension(&w.car_types, 1);
+        eprintln!("before cut: coupler 1 extension {:+.4} m", e);
+        let rest = w.pull_pin(id, 1).expect("pin pulls with the lead car's weight on the climb");
+        let cut_car = id;
+        let excl_lead = w.train(cut_car).unwrap().cars[0].no_couple_with;
+        let excl_head = w.train(rest).unwrap().cars[0].no_couple_with;
+        eprintln!("exclusions: cut car {:?}, new head {:?}", excl_lead, excl_head);
+        // Shove the rest forward at notch 3.
+        w.set_controls(rest, Controls { throttle: 3, reverser: Reverser::Forward, independent: 0.0, ..Default::default() });
+        let mut log = Vec::new();
+        let mut holding = false;
+        for i in 0..(150.0 / DT) as usize {
+            if !holding {
+                if let Some(t) = w.train(cut_car) {
+                    let over = w.car_location(t, 0).map(|l| l.edge == hump.descent && l.s > 2.0).unwrap_or(false);
+                    if over {
+                        holding = true;
+                        w.set_controls(rest, Controls { throttle: 0, reverser: Reverser::Neutral, independent: 1.0, ..Default::default() });
+                    }
+                }
+            }
+            w.step(DT);
+            for ev in w.take_events() {
+                match ev {
+                    SimEvent::Coupled { rel_speed, train, .. } => log.push(format!("t={:.1} COUPLED rel={:.3} train {train}", w.t, rel_speed)),
+                    SimEvent::Bumped { rel_speed, .. } if rel_speed > 0.2 => log.push(format!("t={:.1} bump rel={:.2}", w.t, rel_speed)),
+                    _ => {}
+                }
+            }
+            if i % 1200 == 1199 {
+                let cut = w.train(cut_car).map(|t| (w.car_location(t, 0).map(|l| (w.graph.edge(l.edge).track, l.s)), t.cars[0].v));
+                let rest_t = w.train(rest).map(|t| (t.cars.len(), w.car_location(t, 0).map(|l| l.s), t.cars[0].v));
+                log.push(format!("t={:.0} cut car {:?}  rest {:?}", w.t, cut, rest_t));
+            }
+        }
+        for l in &log {
+            eprintln!("{l}");
+        }
+        assert!(w.train(cut_car).is_some(), "the cut car must remain its own train");
+        assert_eq!(w.train(rest).unwrap().cars.len(), 3, "the rest must not have picked the cut car back up");
+        let loc = w.car_location(w.train(cut_car).unwrap(), 0).unwrap();
+        assert_eq!(w.graph.edge(loc.edge).track, Some(12), "the cut car should have rolled into Bowl 2");
     }
 }

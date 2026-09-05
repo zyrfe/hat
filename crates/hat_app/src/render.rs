@@ -16,7 +16,7 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CarEntities>().add_systems(Startup, setup).add_systems(Update, (sync_cars, overlays));
+        app.init_resource::<CarEntities>().add_systems(Startup, setup).add_systems(Update, (sync_cars, overlays, rebuild_track));
     }
 }
 
@@ -41,6 +41,14 @@ pub struct Palette {
     pub hand_brake: Handle<StandardMaterial>,
     pub bumper: Handle<StandardMaterial>,
     pub switch: Handle<StandardMaterial>,
+    pub ballast: Handle<StandardMaterial>,
+    pub tie: Handle<StandardMaterial>,
+    pub rail: Handle<StandardMaterial>,
+}
+
+#[derive(Component)]
+pub struct TrackVisual {
+    pub generation: u32,
 }
 
 #[derive(Component)]
@@ -86,30 +94,41 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
         hand_brake: unlit(m, 1.0, 0.85, 0.10),
         bumper: unlit(m, 0.85, 0.15, 0.10),
         switch: unlit(m, 0.95, 0.85, 0.20),
+        ballast: Handle::default(),
+        tie: Handle::default(),
+        rail: Handle::default(),
     };
 
     let ground = meshes.add(Plane3d::default().mesh().size(9000.0, 3000.0));
     let ground_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.21, 0.25, 0.16), perceptual_roughness: 1.0, ..default() });
-    commands.spawn((Mesh3d(ground), MeshMaterial3d(ground_mat), Transform::from_xyz(0.0, -0.05, -20.0)));
+    commands.spawn((Mesh3d(ground), MeshMaterial3d(ground_mat), Transform::from_xyz(0.0, -0.05, -350.0)));
 
-    let ballast_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.42, 0.40, 0.37), perceptual_roughness: 1.0, cull_mode: None, ..default() });
-    let tie_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.22, 0.16), perceptual_roughness: 1.0, cull_mode: None, ..default() });
-    let rail_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.60, 0.60, 0.62), perceptual_roughness: 0.45, metallic: 0.6, cull_mode: None, ..default() });
+    let ballast = materials.add(StandardMaterial { base_color: Color::srgb(0.42, 0.40, 0.37), perceptual_roughness: 1.0, cull_mode: None, ..default() });
+    let tie = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.22, 0.16), perceptual_roughness: 1.0, cull_mode: None, ..default() });
+    let rail = materials.add(StandardMaterial { base_color: Color::srgb(0.60, 0.60, 0.62), perceptual_roughness: 0.45, metallic: 0.6, cull_mode: None, ..default() });
+    let palette = Palette { ballast, tie, rail, ..palette };
+    spawn_track(&mut commands, &sim, &mut meshes, &palette);
+    commands.insert_resource(palette);
+}
+
+/// Track, bumpers and switch discs for the current world.
+fn spawn_track(commands: &mut Commands, sim: &Sim, meshes: &mut Assets<Mesh>, palette: &Palette) {
+    let gen = sim.generation;
+    let tag = || TrackVisual { generation: gen };
     for (ei, _edge) in sim.world.graph.edges.iter().enumerate() {
         let poses = edge_samples(&sim.world.graph, ei as EdgeId);
         let (bv, bi) = strip(&poses, 0.0, 2.2, 0.06);
-        commands.spawn((Mesh3d(meshes.add(mesh_from(bv, bi))), MeshMaterial3d(ballast_mat.clone())));
+        commands.spawn((Mesh3d(meshes.add(mesh_from(bv, bi))), MeshMaterial3d(palette.ballast.clone()), tag()));
         let mut rv = Vec::new();
         let mut ri = Vec::new();
         for off in [-0.72f32, 0.72] {
             let (v, i) = strip(&poses, off, 0.08, 0.36);
             append(&mut rv, &mut ri, v, i);
         }
-        commands.spawn((Mesh3d(meshes.add(mesh_from(rv, ri))), MeshMaterial3d(rail_mat.clone())));
+        commands.spawn((Mesh3d(meshes.add(mesh_from(rv, ri))), MeshMaterial3d(palette.rail.clone()), tag()));
         let (tv, ti) = ties(&sim.world.graph, ei as EdgeId);
-        commands.spawn((Mesh3d(meshes.add(mesh_from(tv, ti))), MeshMaterial3d(tie_mat.clone())));
+        commands.spawn((Mesh3d(meshes.add(mesh_from(tv, ti))), MeshMaterial3d(palette.tie.clone()), tag()));
     }
-
     for (ni, node) in sim.world.graph.nodes.iter().enumerate() {
         match &node.kind {
             NodeKind::End => {
@@ -122,22 +141,36 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
                     })
                     .unwrap_or(0.0) as f32;
                 commands.spawn((
-                    Mesh3d(cube.clone()),
+                    Mesh3d(palette.cube.clone()),
                     MeshMaterial3d(palette.bumper.clone()),
                     Transform { translation: sim_to_world(node.pos) + Vec3::Y * (0.8 + node.z as f32), rotation: Quat::from_rotation_y(heading), scale: Vec3::new(1.2, 1.5, 3.2) },
+                    tag(),
                 ));
             }
             NodeKind::Turnout { .. } => {
                 commands.spawn((
-                    Mesh3d(cylinder.clone()),
+                    Mesh3d(palette.cylinder.clone()),
                     MeshMaterial3d(palette.switch.clone()),
                     Transform { translation: sim_to_world(node.pos) + Vec3::Y * (0.15 + node.z as f32), scale: Vec3::new(3.2, 0.3, 3.2), ..default() },
+                    tag(),
                 ));
             }
             NodeKind::Plain => {}
         }
     }
-    commands.insert_resource(palette);
+}
+
+/// When the scenario changes, the track does too.
+fn rebuild_track(mut commands: Commands, sim: Res<Sim>, pal: Option<Res<Palette>>, mut meshes: ResMut<Assets<Mesh>>, q: Query<(Entity, &TrackVisual)>) {
+    let Some(pal) = pal else { return };
+    let stale: Vec<Entity> = q.iter().filter(|(_, t)| t.generation != sim.generation).map(|(e, _)| e).collect();
+    if stale.is_empty() {
+        return;
+    }
+    for e in stale {
+        commands.entity(e).despawn();
+    }
+    spawn_track(&mut commands, &sim, &mut meshes, &pal);
 }
 
 fn mesh_from(verts: Vec<[f32; 3]>, idx: Vec<u32>) -> Mesh {
