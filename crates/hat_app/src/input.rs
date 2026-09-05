@@ -47,6 +47,10 @@ fn keyboard(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let control_keys = [KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyA, KeyCode::KeyD, KeyCode::KeyX, KeyCode::KeyZ, KeyCode::KeyV, KeyCode::KeyC, KeyCode::Backspace];
+    if control_keys.iter().any(|k| keys.just_pressed(*k)) {
+        sim.manual_touch = true;
+    }
     if keys.just_pressed(KeyCode::KeyW) {
         sim.controls.throttle = (sim.controls.throttle + 1).min(8);
     }

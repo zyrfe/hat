@@ -96,6 +96,11 @@ pub struct Sim {
     /// What the locomotive's train is heading into.
     pub ahead: Option<Ahead>,
     pub cur_limit: Option<f64>,
+    /// The yard crew working this locomotive.
+    pub crew: Option<Crew>,
+    /// When true the crew drives; touching a control pauses it.
+    pub auto: bool,
+    pub manual_touch: bool,
 }
 
 impl Sim {
@@ -123,7 +128,14 @@ impl Sim {
             banner: None,
             ahead: None,
             cur_limit: None,
+            crew: None,
+            auto: false,
+            manual_touch: false,
         };
+        let loco_car = s.world.train(loco).map(|t| t.cars[0].id);
+        if let Some(car) = loco_car {
+            s.crew = Some(Crew::new("R. Casey", car, Program::Sort { yard: s.yard.clone(), phase: SortPhase::Start }, 0.0));
+        }
         s.rebuild_index();
         s.score.evaluate(&s.world, &s.yard, s.scenario.time_budget);
         s
@@ -281,6 +293,36 @@ impl Sim {
         }
     }
 
+    pub fn set_dest(&mut self, car: CarId, dest: Option<u32>) {
+        if let Some((ti, ci)) = self.world.train_of_car(car) {
+            self.world.trains[ti].cars[ci].dest = dest;
+        }
+    }
+
+    pub fn set_dest_for_kind(&mut self, kind: CarKind, dest: Option<u32>) {
+        let types = self.world.car_types.clone();
+        for tr in &mut self.world.trains {
+            for c in &mut tr.cars {
+                if types[c.type_id as usize].kind == kind && !types[c.type_id as usize].is_loco() {
+                    c.dest = dest;
+                }
+            }
+        }
+    }
+
+    pub fn resume_crew(&mut self) {
+        let t = self.world.t;
+        if let Some(c) = self.crew.as_mut() {
+            c.paused = false;
+            if c.status != Status::Running {
+                c.status = Status::Running;
+                c.current = None;
+            }
+            c.say(t, "Crew has the engine.");
+        }
+        self.auto = true;
+    }
+
     pub fn action_throw_switch(&mut self, node: NodeId) {
         let name = self.world.graph.node(node).name.clone();
         match self.world.throw_switch(node) {
@@ -301,10 +343,41 @@ fn step_sim(mut sim: ResMut<Sim>) {
     if sim.reload.is_some() {
         return;
     }
-    sim.apply_controls();
+    let t0 = sim.world.t;
+    if sim.manual_touch {
+        if sim.auto {
+            if let Some(c) = sim.crew.as_mut() {
+                if !c.paused {
+                    c.paused = true;
+                    c.say(t0, "You have the engine.");
+                }
+            }
+        }
+        sim.manual_touch = false;
+    }
+    let crew_drives = sim.auto && sim.crew.as_ref().map(|c| !c.paused && c.status == Status::Running).unwrap_or(false);
+    if !crew_drives {
+        sim.apply_controls();
+    }
     let n = sim.time_scale;
     for _ in 0..n {
+        if crew_drives {
+            let Sim { crew, world, .. } = &mut *sim;
+            if let Some(c) = crew.as_mut() {
+                c.step(world, DT);
+            }
+        }
         sim.world.step(DT);
+    }
+    if crew_drives {
+        sim.adopt_train_controls();
+        let line = sim.crew.as_ref().and_then(|c| c.radio.back().cloned());
+        if let Some((lt, line)) = line {
+            if lt >= t0 {
+                let now = sim.world.t;
+                sim.engineer.react(now, Mood::Focused, 4.0, &line, false);
+            }
+        }
     }
     let events = sim.world.take_events();
     let t = sim.world.t;

@@ -161,9 +161,9 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Speed restriction lookahead: next limit, bumper or split switch ahead with distance | P0 | done | sim `lookahead` |
 | Derail and hard-coupling banners with cause | P0 | done | |
 | Engineer portrait with reactive mood and one-liners | P0 | done | placeholder for a crew model |
-| Crew executor: resumable maneuvers (route, move, couple, pull clear, shove, kick, cut, tie down) | M1 | planned | crew.md |
-| Switch list orders and greedy block planner | M1 | planned | crew.md |
-| Auto/manual override with plan panel and radio lines | M1 | planned | crew.md |
+| Crew executor: resumable maneuvers (route, move, couple, pull clear, shove, kick, cut, tie down) | M1 | done | route, drive, couple, pull clear, shove to joint, cut, tie down; kick later |
+| Switch list orders and greedy block planner | M1 | done | per-car destinations editable in the selection panel |
+| Auto/manual override with plan panel and radio lines | M1 | done | touching a control pauses the crew |
 | Walking time and crew skill | M2 | idea | crew.md |
 | Asset manifest with placeholder flag and provenance; lineup sheet highlights placeholders | M1 | planned | art.md |
 | Normalization script: fit to sim box, flat facets, palette quantize, LODs | M1 | planned | Blender headless or Rust |

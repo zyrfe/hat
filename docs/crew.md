@@ -59,6 +59,14 @@ precisely. Hours of service already exist in the operations design. This is wher
 Engineer character stops being a portrait and starts being a person you assign. Multiple
 crews and engines make this the dispatching game.
 
+## Status
+
+First version built 2026-09-05. The Sort program couples to the standing cut, releases hand
+brakes, then delivers trailing blocks by pulling clear of the lead, lining the ladder and
+shoving to a joint 20 m inside the track, tying down and cutting. Unaided it finishes the
+Yard Shift in about 73 minutes of sim time with one hard joint, which is par for now. Kicks,
+digging and multi-crew traffic are not in yet.
+
 ## Build order
 
 1. `hat_world::crew`: `Order`, `SwitchList`, `Move`, `Maneuver`, `Executor`. Deterministic,

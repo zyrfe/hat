@@ -1116,3 +1116,129 @@ mod lookahead_tests {
         }
     }
 }
+
+/// Distances and neighbours along the track, for crews and dispatchers.
+impl World {
+    /// Path coordinate of one end face of a train.
+    pub fn face_x(&self, train: &Train, end: End) -> f64 {
+        match end {
+            End::Head => train.head_face_x(&self.car_types),
+            End::Tail => train.tail_face_x(&self.car_types),
+        }
+    }
+
+    /// Distance along the track from path coordinate `x` on `train`, walking in the train's
+    /// `forward` (+x) or backward direction, to `node`. None if the node is not ahead.
+    pub fn distance_from_x_to_node(&self, train: &Train, x: f64, forward: bool, node: NodeId, max_dist: f64) -> Option<f64> {
+        let loc = train.locate(&self.graph, x)?;
+        let mut along_s = loc.forward == forward;
+        let mut edge = loc.edge;
+        let e = self.graph.edge(edge);
+        let mut dist = if along_s { e.length - loc.s } else { loc.s };
+        let mut n = if along_s { e.b } else { e.a };
+        loop {
+            if n == node {
+                return Some(dist);
+            }
+            if dist > max_dist {
+                return None;
+            }
+            match self.graph.exit(edge, n) {
+                Exit::Edge(next) => {
+                    let ne = self.graph.edge(next);
+                    along_s = ne.a == n;
+                    n = if along_s { ne.b } else { ne.a };
+                    dist += ne.length;
+                    edge = next;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    pub fn distance_to_node(&self, train: &Train, from: End, forward: bool, node: NodeId, max_dist: f64) -> Option<f64> {
+        self.distance_from_x_to_node(train, self.face_x(train, from), forward, node, max_dist)
+    }
+
+    /// Occupied intervals `(train index, edge, s0, s1)` for every train.
+    pub fn edge_intervals(&self) -> Vec<(usize, EdgeId, f64, f64)> {
+        let types = &self.car_types;
+        let mut out = Vec::new();
+        for (ti, tr) in self.trains.iter().enumerate() {
+            let head = tr.head_face_x(types);
+            let tail = tr.tail_face_x(types);
+            let mut start = tr.path_origin;
+            for seg in &tr.path {
+                let len = self.graph.edge(seg.edge).length;
+                let x0 = tail.max(start);
+                let x1 = head.min(start + len);
+                if x1 > x0 {
+                    let (l0, l1) = (x0 - start, x1 - start);
+                    let (s0, s1) = if seg.forward { (l0, l1) } else { (len - l1, len - l0) };
+                    out.push((ti, seg.edge, s0, s1));
+                }
+                start += len;
+            }
+        }
+        out
+    }
+
+    /// Gap from the leading face of `train` to the nearest other train ahead, and which one.
+    pub fn distance_to_train_ahead(&self, train: &Train, forward: bool, max_dist: f64) -> Option<(f64, TrainId)> {
+        let me = self.trains.iter().position(|t| t.id == train.id)?;
+        let ivs = self.edge_intervals();
+        let face = if forward { End::Head } else { End::Tail };
+        let loc = train.locate(&self.graph, self.face_x(train, face))?;
+        let mut along_s = loc.forward == forward;
+        let mut edge = loc.edge;
+        let mut s_face = loc.s;
+        let mut base = 0.0;
+        let mut n = if along_s { self.graph.edge(edge).b } else { self.graph.edge(edge).a };
+        loop {
+            let mut best: Option<(f64, TrainId)> = None;
+            for &(ti, e, s0, s1) in &ivs {
+                if ti == me || e != edge {
+                    continue;
+                }
+                let d = if along_s { s0 - s_face } else { s_face - s1 };
+                if d >= -CONTACT_EPS && best.map_or(true, |b| d < b.0) {
+                    best = Some((d.max(0.0), self.trains[ti].id));
+                }
+            }
+            if let Some((d, id)) = best {
+                return Some((base + d, id));
+            }
+            let e = self.graph.edge(edge);
+            base += if along_s { e.length - s_face } else { s_face };
+            if base > max_dist {
+                return None;
+            }
+            match self.graph.exit(edge, n) {
+                Exit::Edge(next) => {
+                    let ne = self.graph.edge(next);
+                    along_s = ne.a == n;
+                    s_face = if along_s { 0.0 } else { ne.length };
+                    n = if along_s { ne.b } else { ne.a };
+                    edge = next;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Train index and car index holding a car id.
+    pub fn train_of_car(&self, car: CarId) -> Option<(usize, usize)> {
+        for (ti, tr) in self.trains.iter().enumerate() {
+            if let Some(ci) = tr.cars.iter().position(|c| c.id == car) {
+                return Some((ti, ci));
+            }
+        }
+        None
+    }
+
+    /// Remove a train from the world, for example when it leaves through a portal.
+    pub fn remove_train(&mut self, id: TrainId) -> Option<Train> {
+        let idx = self.train_index(id)?;
+        Some(self.trains.remove(idx))
+    }
+}

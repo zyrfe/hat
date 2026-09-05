@@ -118,6 +118,10 @@ fn hud(
     egui::Panel::top("top").show(&mut root, |ui| {
         ui.horizontal(|ui| {
             ui.heading(sim.scenario.name);
+            if sim.auto {
+                let paused = sim.crew.as_ref().map(|c| c.paused).unwrap_or(false);
+                ui.colored_label(if paused { Color32::from_rgb(250, 190, 60) } else { Color32::from_rgb(110, 200, 120) }, if paused { "AUTO paused: you have the engine" } else { "AUTO: crew driving" });
+            }
             ui.separator();
             ui.label(format!("t {}", uf::duration(sim.world.t)));
             if sim.time_scale == 0 {
@@ -308,6 +312,10 @@ fn hud(
             }
             ui.separator();
 
+            ui.heading("Crew");
+            crew_panel(ui, sim);
+            ui.separator();
+
             ui.heading("Selection");
             selection_panel(ui, sim, sel.sel, u);
             ui.separator();
@@ -417,6 +425,34 @@ fn selection_panel(ui: &mut egui::Ui, sim: &mut Sim, s: Sel, u: UnitSystem) {
             ui.label(line1);
             ui.label(line2);
             ui.label(line3);
+            let (cur_dest, kind) = {
+                let tr = sim.world.train(tid).unwrap();
+                let c = &tr.cars[ci];
+                (c.dest, sim.world.car_types[c.type_id as usize].kind)
+            };
+            let mut new_dest: Option<Option<u32>> = None;
+            let mut all_kind = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Send to:");
+                let ids: Vec<u32> = sim.yard.tracks.iter().map(|t| t.id).collect();
+                for t in ids {
+                    if ui.selectable_label(cur_dest == Some(t), format!("{t}")).clicked() {
+                        new_dest = Some(Some(t));
+                    }
+                }
+                if ui.selectable_label(cur_dest.is_none(), "none").clicked() {
+                    new_dest = Some(None);
+                }
+                if ui.button(format!("all {kind:?}")).clicked() {
+                    all_kind = true;
+                }
+            });
+            if let Some(d) = new_dest {
+                sim.set_dest(id, d);
+            }
+            if all_kind {
+                sim.set_dest_for_kind(kind, cur_dest);
+            }
             ui.horizontal_wrapped(|ui| {
                 if ui.button(if hb { "Release hand brake (H)" } else { "Set hand brake (H)" }).clicked() {
                     sim.action_hand_brake(s);
@@ -453,5 +489,45 @@ fn selection_panel(ui: &mut egui::Ui, sim: &mut Sim, s: Sel, u: UnitSystem) {
                 }
             });
         }
+    }
+}
+
+fn crew_panel(ui: &mut egui::Ui, sim: &mut Sim) {
+    let mut auto = sim.auto;
+    if ui.checkbox(&mut auto, "Auto: the crew works the switch list").changed() {
+        if auto {
+            sim.resume_crew();
+        } else {
+            sim.auto = false;
+            if let Some(c) = sim.crew.as_mut() {
+                c.paused = true;
+            }
+        }
+    }
+    let Some(crew) = sim.crew.as_ref() else {
+        ui.label("No crew.");
+        return;
+    };
+    let status = match &crew.status {
+        Status::Running => if crew.paused { "paused, you have the engine".to_string() } else { crew.describe() },
+        Status::Done => format!("shift complete in {}", uf::duration(crew.finished_at.unwrap_or(0.0) - crew.started_at)),
+        Status::Failed(why) => format!("stuck: {why}"),
+    };
+    ui.label(format!("{}: {status}", crew.name));
+    let mut resume = false;
+    if crew.paused && sim.auto || matches!(crew.status, Status::Failed(_)) {
+        if ui.button("Resume crew").clicked() {
+            resume = true;
+        }
+    }
+    let plan = crew.plan_preview(&sim.world);
+    if !plan.is_empty() {
+        ui.small(format!("{} moves left: ", plan.len()) + &plan.iter().take(8).map(|(t, n)| format!("T{t}\u{2190}{n}")).collect::<Vec<_>>().join("  ") + if plan.len() > 8 { " \u{2026}" } else { "" });
+    }
+    for (t, line) in crew.radio.iter().rev().take(5) {
+        ui.small(format!("{} {line}", uf::duration(*t)));
+    }
+    if resume {
+        sim.resume_crew();
     }
 }

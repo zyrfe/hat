@@ -277,6 +277,7 @@ fn levers(ui: &mut egui::Ui, sim: &mut Sim) {
             sim.say("EMERGENCY: pipe dumped");
         }
         sim.controls = next;
+        sim.manual_touch = true;
     }
 }
 
