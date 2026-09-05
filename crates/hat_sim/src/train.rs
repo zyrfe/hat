@@ -212,7 +212,7 @@ impl Train {
     /// World pose at path coordinate `x`, heading toward +x.
     pub fn pose_at(&self, graph: &TrackGraph, x: f64) -> Option<Pose> {
         let loc = self.locate(graph, x)?;
-        let mut p = graph.edge(loc.edge).geom.pose(loc.s);
+        let mut p = graph.pose_on_edge(loc.edge, loc.s);
         if !loc.forward {
             p.heading += PI;
         }

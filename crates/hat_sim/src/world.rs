@@ -16,6 +16,9 @@ pub struct World {
     pub t: f64,
     /// Events since the last `take_events`.
     pub events: Vec<SimEvent>,
+    /// Running cargo tallies, kg.
+    pub cargo_loaded: f64,
+    pub cargo_unloaded: f64,
     next_train: TrainId,
     next_car: CarId,
 }
@@ -46,6 +49,8 @@ impl World {
             trains: Vec::new(),
             t: 0.0,
             events: Vec::new(),
+            cargo_loaded: 0.0,
+            cargo_unloaded: 0.0,
             next_train: 1,
             next_car: 1,
         }
@@ -285,6 +290,7 @@ impl World {
                 step_train(train, graph, car_types, *t, dt, events, &mut breaks);
             }
         }
+        self.process_facilities(dt);
         for (id, k) in breaks {
             if let Some(idx) = self.train_index(id) {
                 if k > 0 && k < self.trains[idx].cars.len() {
@@ -637,12 +643,12 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
     let mut overspeed: Option<usize> = None;
     for i in 0..n {
         let ct = &types[train.cars[i].type_id as usize];
-        let (grade, curv, limit) = match locs[i] {
+        let (grade, curv, limit, retarder) = match locs[i] {
             Some(l) => {
                 let e = graph.edge(l.edge);
-                (if l.forward { e.grade } else { -e.grade }, e.geom.curvature(), e.speed_limit)
+                (if l.forward { e.grade } else { -e.grade }, e.geom.curvature(), e.speed_limit, e.retarder)
             }
-            None => (0.0, 0.0, f64::INFINITY),
+            None => (0.0, 0.0, f64::INFINITY, None),
         };
         let controls = &train.controls;
         let car = &mut train.cars[i];
@@ -663,7 +669,14 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
         let rolling = m * (DAVIS_A + DAVIS_B * vabs) + DAVIS_C * axles + DAVIS_D * vabs * vabs + m * CURVE_RESISTANCE * curv;
         let air = (ct.m_tare * G * BRAKE_RATIO * (car.brake.p_cyl / FULL_SERVICE_CYL)).min(BRAKE_ADHESION * m * G);
         let hb = car.hand_brake * HAND_BRAKE_RATIO * m * G;
-        let fric = rolling + air + hb + ind;
+        let retard = match retarder {
+            Some(vt) => {
+                let target = if car.m_payload < 10_000.0 { vt + 1.0 } else { vt };
+                if vabs > target { m * RETARDER_DECEL } else { 0.0 }
+            }
+            None => 0.0,
+        };
+        let fric = rolling + air + hb + ind + retard;
         let fric_static = STARTING_RESISTANCE_FACTOR * (m * DAVIS_A + DAVIS_C * axles) + air + hb + ind;
         if vabs < V_EPS {
             if drive.abs() <= fric_static {
@@ -1240,5 +1253,57 @@ impl World {
     pub fn remove_train(&mut self, id: TrainId) -> Option<Train> {
         let idx = self.train_index(id)?;
         Some(self.trains.remove(idx))
+    }
+}
+
+impl World {
+    /// Load or unload cars standing or creeping on facility edges.
+    fn process_facilities(&mut self, dt: f64) {
+        let World { graph, car_types, trains, events, cargo_loaded, cargo_unloaded, .. } = self;
+        for tr in trains.iter_mut() {
+            let n = tr.cars.len();
+            for i in 0..n {
+                let Some(loc) = tr.locate(graph, tr.cars[i].x) else { continue };
+                let Some(fac) = graph.edge(loc.edge).facility else { continue };
+                let ct = &car_types[tr.cars[i].type_id as usize];
+                if ct.is_loco() || ct.m_payload_max <= 0.0 {
+                    continue;
+                }
+                let car = &mut tr.cars[i];
+                match fac {
+                    Facility::Load { commodity, rate, max_speed } => {
+                        if car.v.abs() > max_speed || car.m_payload >= ct.m_payload_max {
+                            continue;
+                        }
+                        if car.commodity != Commodity::Empty && car.commodity != commodity {
+                            continue;
+                        }
+                        let add = (rate * dt).min(ct.m_payload_max - car.m_payload);
+                        car.m_payload += add;
+                        car.commodity = commodity;
+                        *cargo_loaded += add;
+                        if car.m_payload >= ct.m_payload_max - 1e-6 {
+                            let pos = graph.pose_on_edge(loc.edge, loc.s).pos;
+                            events.push(SimEvent::Loaded { car: car.id, pos, mass: car.m_payload });
+                        }
+                    }
+                    Facility::Unload { rate, max_speed } => {
+                        if car.v.abs() > max_speed || car.m_payload <= 0.0 {
+                            continue;
+                        }
+                        let take = (rate * dt).min(car.m_payload);
+                        car.m_payload -= take;
+                        *cargo_unloaded += take;
+                        if car.m_payload <= 1e-6 {
+                            car.m_payload = 0.0;
+                            let mass = ct.m_payload_max;
+                            car.commodity = Commodity::Empty;
+                            let pos = graph.pose_on_edge(loc.edge, loc.s).pos;
+                            events.push(SimEvent::Unloaded { car: car.id, pos, mass });
+                        }
+                    }
+                }
+            }
+        }
     }
 }

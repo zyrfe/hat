@@ -58,6 +58,25 @@ pub struct YardTrack {
     pub entry: (NodeId, Route),
 }
 
+/// A fan of tracks reached through a row of turnouts.
+#[derive(Clone, Debug)]
+pub struct Ladder {
+    /// Turnout that leads onto the ladder, and the route that does it.
+    pub entry: Option<(NodeId, Route)>,
+    pub switches: Vec<NodeId>,
+    pub tracks: Vec<u32>,
+}
+
+/// The hump: shove up the approach, cut at the crest, cars roll into the bowl.
+#[derive(Clone, Debug)]
+pub struct Hump {
+    pub turnout: NodeId,
+    pub crest: NodeId,
+    /// First edge past the crest, where a cut car is on its own.
+    pub descent: EdgeId,
+    pub bowl: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct Yard {
     pub main_west: EdgeId,
@@ -67,8 +86,16 @@ pub struct Yard {
     pub ladder_switches: Vec<NodeId>,
     pub lead_edges: Vec<EdgeId>,
     pub tracks: Vec<YardTrack>,
+    pub ladders: Vec<Ladder>,
     pub min: DVec2,
     pub max: DVec2,
+    /// Node where road trains appear and leave, if the world has one.
+    pub portal: Option<NodeId>,
+    /// Receiving track: id, west turnout, east turnout.
+    pub receiving: Option<(u32, NodeId, NodeId)>,
+    pub hump: Option<Hump>,
+    /// Departure track for outbound trains.
+    pub departure: Option<u32>,
 }
 
 impl Yard {
@@ -84,11 +111,12 @@ impl Yard {
         }
     }
 
-    /// Switch settings that route a train from the lead into `track`.
+    /// Switch settings that route a train from the ladder entry into `track`.
     pub fn route_to(&self, track: u32) -> Option<Vec<(NodeId, Route)>> {
         let t = self.track(track)?;
-        let mut out = vec![(self.lead_switch, Route::Diverging)];
-        for &sw in &self.ladder_switches {
+        let ladder = self.ladders.iter().find(|l| l.tracks.contains(&track))?;
+        let mut out: Vec<(NodeId, Route)> = ladder.entry.into_iter().collect();
+        for &sw in &ladder.switches {
             if sw == t.entry.0 {
                 out.push((sw, t.entry.1));
                 break;
@@ -96,6 +124,11 @@ impl Yard {
             out.push((sw, Route::Normal));
         }
         Some(out)
+    }
+
+    /// Which ladder a track hangs off.
+    pub fn ladder_of(&self, track: u32) -> Option<usize> {
+        self.ladders.iter().position(|l| l.tracks.contains(&track))
     }
 }
 
@@ -171,7 +204,22 @@ pub fn build_ladder_yard(p: &YardParams) -> (TrackGraph, Yard) {
         incoming = outgoing;
     }
     min.y = -10.0;
-    let yard = Yard { main_west, main_east, lead_switch: t0, ladder_switches, lead_edges, tracks, min, max };
+    let ladder = Ladder { entry: Some((t0, Route::Diverging)), switches: ladder_switches.clone(), tracks: tracks.iter().map(|t| t.id).collect() };
+    let yard = Yard {
+        main_west,
+        main_east,
+        lead_switch: t0,
+        ladder_switches,
+        lead_edges,
+        tracks,
+        ladders: vec![ladder],
+        min,
+        max,
+        portal: None,
+        receiving: None,
+        hump: None,
+        departure: Some(1),
+    };
     (g, yard)
 }
 

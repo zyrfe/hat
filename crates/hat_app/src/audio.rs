@@ -185,6 +185,8 @@ fn play_events(mut commands: Commands, mut sim: ResMut<Sim>, sounds: Option<Res<
             SimEvent::Bled { pos, .. } => (&sounds.hiss, 0.45, 1.3, pos),
             SimEvent::HosesConnected { pos, .. } => (&sounds.hiss, 0.35, 1.1, pos),
             SimEvent::AirBottled { pos, .. } => (&sounds.clack, 0.35, 1.2, pos),
+            SimEvent::Loaded { pos, .. } => (&sounds.hiss, 0.3, 0.7, pos),
+            SimEvent::Unloaded { pos, .. } => (&sounds.hiss, 0.3, 0.6, pos),
         };
         let d = sim_to_world(pos).distance(rig.focus);
         let reach = rig.distance * 3.0 + 250.0;

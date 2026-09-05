@@ -13,7 +13,7 @@ use hat_sim::*;
 use hat_units::fmt as uf;
 use hat_units::{UnitSystem, G};
 
-use crate::camera::sim_to_world;
+use crate::camera::pose_to_world;
 use crate::sim::{Engineer, Mood, Sim};
 
 pub const CAB_W: u32 = 512;
@@ -62,7 +62,7 @@ fn follow(sim: Res<Sim>, time: Res<Time>, mut q: Query<&mut Transform, With<CabC
         heading += PI;
     }
     let dir = Vec3::new(heading.cos(), 0.0, -heading.sin());
-    let loco = sim_to_world(pose.pos);
+    let loco = pose_to_world(&pose);
     let target_pos = loco - dir * 38.0 + Vec3::Y * 15.0;
     let target_look = loco + dir * 20.0 + Vec3::Y * 2.0;
     let k = 1.0 - (-time.delta_secs() * 6.0).exp();

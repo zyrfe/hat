@@ -8,7 +8,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use hat_sim::*;
 
-use crate::camera::sim_to_world;
+use crate::camera::{pose_to_world, sim_to_world};
 use crate::input::{Sel, Selection};
 use crate::sim::Sim;
 
@@ -95,8 +95,8 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
     let ballast_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.42, 0.40, 0.37), perceptual_roughness: 1.0, cull_mode: None, ..default() });
     let tie_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.30, 0.22, 0.16), perceptual_roughness: 1.0, cull_mode: None, ..default() });
     let rail_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.60, 0.60, 0.62), perceptual_roughness: 0.45, metallic: 0.6, cull_mode: None, ..default() });
-    for edge in &sim.world.graph.edges {
-        let poses = edge_samples(edge);
+    for (ei, _edge) in sim.world.graph.edges.iter().enumerate() {
+        let poses = edge_samples(&sim.world.graph, ei as EdgeId);
         let (bv, bi) = strip(&poses, 0.0, 2.2, 0.06);
         commands.spawn((Mesh3d(meshes.add(mesh_from(bv, bi))), MeshMaterial3d(ballast_mat.clone())));
         let mut rv = Vec::new();
@@ -106,7 +106,7 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
             append(&mut rv, &mut ri, v, i);
         }
         commands.spawn((Mesh3d(meshes.add(mesh_from(rv, ri))), MeshMaterial3d(rail_mat.clone())));
-        let (tv, ti) = ties(edge);
+        let (tv, ti) = ties(&sim.world.graph, ei as EdgeId);
         commands.spawn((Mesh3d(meshes.add(mesh_from(tv, ti))), MeshMaterial3d(tie_mat.clone())));
     }
 
@@ -124,14 +124,14 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
                 commands.spawn((
                     Mesh3d(cube.clone()),
                     MeshMaterial3d(palette.bumper.clone()),
-                    Transform { translation: sim_to_world(node.pos) + Vec3::Y * 0.8, rotation: Quat::from_rotation_y(heading), scale: Vec3::new(1.2, 1.5, 3.2) },
+                    Transform { translation: sim_to_world(node.pos) + Vec3::Y * (0.8 + node.z as f32), rotation: Quat::from_rotation_y(heading), scale: Vec3::new(1.2, 1.5, 3.2) },
                 ));
             }
             NodeKind::Turnout { .. } => {
                 commands.spawn((
                     Mesh3d(cylinder.clone()),
                     MeshMaterial3d(palette.switch.clone()),
-                    Transform { translation: sim_to_world(node.pos) + Vec3::Y * 0.15, scale: Vec3::new(3.2, 0.3, 3.2), ..default() },
+                    Transform { translation: sim_to_world(node.pos) + Vec3::Y * (0.15 + node.z as f32), scale: Vec3::new(3.2, 0.3, 3.2), ..default() },
                 ));
             }
             NodeKind::Plain => {}
@@ -149,12 +149,15 @@ fn mesh_from(verts: Vec<[f32; 3]>, idx: Vec<u32>) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-fn edge_samples(e: &Edge) -> Vec<Pose> {
+fn edge_samples(g: &TrackGraph, id: EdgeId) -> Vec<Pose> {
+    let e = g.edge(id);
+    let graded = (g.node(e.a).z - g.node(e.b).z).abs() > 1e-6;
     let n = match e.geom {
-        Geometry::Straight { .. } => 1,
+        Geometry::Straight { .. } if !graded => 1,
+        Geometry::Straight { .. } => ((e.length / 10.0).ceil() as usize).max(2),
         Geometry::Arc { .. } => ((e.length / 1.5).ceil() as usize).max(6),
     };
-    (0..=n).map(|i| e.geom.pose(e.length * i as f64 / n as f64)).collect()
+    (0..=n).map(|i| g.pose_on_edge(id, e.length * i as f64 / n as f64)).collect()
 }
 
 fn left_of(p: &Pose) -> Vec3 {
@@ -172,7 +175,7 @@ fn strip(poses: &[Pose], offset: f32, half_w: f32, y: f32) -> (Vec<[f32; 3]>, Ve
     let mut idx = Vec::with_capacity(poses.len() * 6);
     for p in poses {
         let l = left_of(p);
-        let c = sim_to_world(p.pos) + l * offset + Vec3::Y * y;
+        let c = pose_to_world(p) + l * offset + Vec3::Y * y;
         v.push((c + l * half_w).to_array());
         v.push((c - l * half_w).to_array());
     }
@@ -183,15 +186,16 @@ fn strip(poses: &[Pose], offset: f32, half_w: f32, y: f32) -> (Vec<[f32; 3]>, Ve
     (v, idx)
 }
 
-fn ties(e: &Edge) -> (Vec<[f32; 3]>, Vec<u32>) {
+fn ties(g: &TrackGraph, id: EdgeId) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let e = g.edge(id);
     let step = 0.6;
     let n = (e.length / step).floor() as usize;
     let mut v = Vec::with_capacity(n * 4);
     let mut idx = Vec::with_capacity(n * 6);
     for i in 0..n {
         let s = (i as f64 + 0.5) * step;
-        let p = e.geom.pose(s);
-        let c = sim_to_world(p.pos) + Vec3::Y * 0.2;
+        let p = g.pose_on_edge(id, s);
+        let c = pose_to_world(&p) + Vec3::Y * 0.2;
         let l = left_of(&p) * 1.3;
         let f = forward_of(&p) * 0.12;
         let base = v.len() as u32;
@@ -215,7 +219,7 @@ pub fn car_transform(pose: &Pose, car: &CarState) -> Transform {
     if !car.facing_head {
         heading += PI;
     }
-    let mut t = Transform::from_translation(sim_to_world(pose.pos)).with_rotation(Quat::from_rotation_y(heading));
+    let mut t = Transform::from_translation(pose_to_world(pose)).with_rotation(Quat::from_rotation_y(heading));
     if car.derailed {
         let left = Vec3::new(-heading.sin(), 0.0, -heading.cos());
         t.translation += left * 1.4;
@@ -380,12 +384,12 @@ fn draw_leg(gz: &mut Gizmos, g: &TrackGraph, edge: EdgeId, node: NodeId, color: 
     for i in 0..steps {
         let (s0, s1) = (span * i as f64 / steps as f64, span * (i + 1) as f64 / steps as f64);
         let (a, b) = if from_a { (s0, s1) } else { (e.length - s0, e.length - s1) };
-        gz.line(sim_to_world(e.geom.pose(a).pos) + Vec3::Y * 0.7, sim_to_world(e.geom.pose(b).pos) + Vec3::Y * 0.7, color);
+        gz.line(pose_to_world(&g.pose_on_edge(edge, a)) + Vec3::Y * 0.7, pose_to_world(&g.pose_on_edge(edge, b)) + Vec3::Y * 0.7, color);
     }
 }
 
 fn rect(gz: &mut Gizmos, p: &Pose, half_l: f32, half_w: f32, color: Color) {
-    let c = sim_to_world(p.pos) + Vec3::Y * 0.4;
+    let c = pose_to_world(p) + Vec3::Y * 0.4;
     let f = forward_of(p) * half_l;
     let l = left_of(p) * half_w;
     let pts = [c + f + l, c + f - l, c - f - l, c - f + l];

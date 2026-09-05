@@ -29,4 +29,8 @@ pub enum SimEvent {
     Bled { car: CarId, pos: DVec2 },
     HosesConnected { train: TrainId, pos: DVec2 },
     AirBottled { train: TrainId, pos: DVec2 },
+    /// A car finished loading at a facility.
+    Loaded { car: CarId, pos: DVec2, mass: f64 },
+    /// A car finished unloading at a facility.
+    Unloaded { car: CarId, pos: DVec2, mass: f64 },
 }

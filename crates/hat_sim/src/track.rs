@@ -13,11 +13,13 @@ pub struct Pose {
     pub pos: DVec2,
     /// Radians, counter-clockwise from +x.
     pub heading: f64,
+    /// Rail height above datum, m.
+    pub z: f64,
 }
 
 impl Pose {
     pub fn new(x: f64, y: f64, heading: f64) -> Self {
-        Pose { pos: DVec2::new(x, y), heading }
+        Pose { pos: DVec2::new(x, y), heading, z: 0.0 }
     }
     pub fn dir(&self) -> DVec2 {
         DVec2::from_angle(self.heading)
@@ -71,12 +73,12 @@ impl Geometry {
                 let d = *b - *a;
                 let len = d.length();
                 let dir = if len > 0.0 { d / len } else { DVec2::X };
-                Pose { pos: *a + dir * s, heading: dir.to_angle() }
+                Pose { pos: *a + dir * s, heading: dir.to_angle(), z: 0.0 }
             }
             Geometry::Arc { center, radius, start_angle, sweep } => {
                 let sgn = sweep.signum();
                 let ang = start_angle + sgn * (s / radius);
-                Pose { pos: *center + DVec2::from_angle(ang) * *radius, heading: ang + sgn * FRAC_PI_2 }
+                Pose { pos: *center + DVec2::from_angle(ang) * *radius, heading: ang + sgn * FRAC_PI_2, z: 0.0 }
             }
         }
     }
@@ -115,9 +117,20 @@ pub enum NodeKind {
     Turnout { toe: EdgeId, normal: EdgeId, diverging: EdgeId, setting: Route },
 }
 
+/// Something trackside that changes cars standing or creeping on an edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Facility {
+    /// Fills cars that can take the commodity, kg/s per car, while slower than `max_speed`.
+    Load { commodity: crate::Commodity, rate: f64, max_speed: f64 },
+    /// Empties cars, kg/s per car, while slower than `max_speed`.
+    Unload { rate: f64, max_speed: f64 },
+}
+
 #[derive(Clone, Debug)]
 pub struct Node {
     pub pos: DVec2,
+    /// Rail height above datum, m.
+    pub z: f64,
     pub kind: NodeKind,
     pub edges: Vec<EdgeId>,
     pub name: String,
@@ -135,6 +148,10 @@ pub struct Edge {
     pub speed_limit: f64,
     /// Logical track this edge belongs to, for scoring and display.
     pub track: Option<u32>,
+    /// Retarder: cars faster than this (m/s) are braked hard while on the edge. Empties
+    /// are let go one meter per second faster, like a weight-responsive retarder.
+    pub retarder: Option<f64>,
+    pub facility: Option<Facility>,
 }
 
 /// What lies beyond a node when leaving an edge through it.
@@ -162,13 +179,24 @@ impl TrackGraph {
     }
 
     pub fn add_node(&mut self, pos: DVec2, kind: NodeKind, name: impl Into<String>) -> NodeId {
-        self.nodes.push(Node { pos, kind, edges: Vec::new(), name: name.into() });
+        self.add_node_z(pos, 0.0, kind, name)
+    }
+
+    pub fn add_node_z(&mut self, pos: DVec2, z: f64, kind: NodeKind, name: impl Into<String>) -> NodeId {
+        self.nodes.push(Node { pos, z, kind, edges: Vec::new(), name: name.into() });
         (self.nodes.len() - 1) as NodeId
+    }
+
+    /// Edge whose grade follows the node heights.
+    pub fn add_edge_graded(&mut self, a: NodeId, b: NodeId, geom: Geometry, speed_limit: f64, track: Option<u32>) -> EdgeId {
+        let len = geom.length();
+        let grade = if len > 0.0 { (self.nodes[b as usize].z - self.nodes[a as usize].z) / len } else { 0.0 };
+        self.add_edge(a, b, geom, grade, speed_limit, track)
     }
 
     pub fn add_edge(&mut self, a: NodeId, b: NodeId, geom: Geometry, grade: f64, speed_limit: f64, track: Option<u32>) -> EdgeId {
         let length = geom.length();
-        self.edges.push(Edge { a, b, geom, length, grade, speed_limit, track });
+        self.edges.push(Edge { a, b, geom, length, grade, speed_limit, track, retarder: None, facility: None });
         let id = (self.edges.len() - 1) as EdgeId;
         self.nodes[a as usize].edges.push(id);
         self.nodes[b as usize].edges.push(id);
@@ -224,8 +252,13 @@ impl TrackGraph {
         }
     }
 
+    /// Pose on an edge including rail height.
     pub fn pose_on_edge(&self, edge: EdgeId, s: f64) -> Pose {
-        self.edge(edge).geom.pose(s)
+        let e = self.edge(edge);
+        let mut p = e.geom.pose(s);
+        let (za, zb) = (self.node(e.a).z, self.node(e.b).z);
+        p.z = if e.length > 0.0 { za + (zb - za) * (s / e.length).clamp(0.0, 1.0) } else { za };
+        p
     }
 
     /// Distance from `s` on `edge` to `node`, if the node is an end of that edge.

@@ -69,3 +69,6 @@ pub const OVERSPEED_DERAIL_FACTOR: f64 = 1.5;
 pub const OVERLAP_DERAIL: f64 = 0.3;
 
 pub const V_EPS: f64 = 1e-3;
+
+/// Deceleration a retarder applies to a car above its release speed, m/s².
+pub const RETARDER_DECEL: f64 = 1.5;

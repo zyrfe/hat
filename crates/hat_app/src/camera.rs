@@ -45,6 +45,11 @@ pub fn sim_to_world(p: glam::DVec2) -> Vec3 {
     Vec3::new(p.x as f32, 0.0, -(p.y as f32))
 }
 
+/// Pose to world, including rail height.
+pub fn pose_to_world(p: &hat_sim::Pose) -> Vec3 {
+    sim_to_world(p.pos) + Vec3::Y * p.z as f32
+}
+
 pub fn world_to_sim(p: Vec3) -> glam::DVec2 {
     glam::DVec2::new(p.x as f64, -(p.z as f64))
 }
