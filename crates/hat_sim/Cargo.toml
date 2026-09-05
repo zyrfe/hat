@@ -1,0 +1,10 @@
+[package]
+name = "hat_sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HAT simulation core: 1D train dynamics on a track graph. No engine dependency."
+
+[dependencies]
+hat_units = { workspace = true }
+glam = "0.33"

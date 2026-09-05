@@ -1,0 +1,17 @@
+[package]
+name = "hat_app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HAT: Huge-Ass Trains. Bevy front end."
+
+[dependencies]
+bevy = { version = "0.19", features = ["wav"] }
+bevy_egui = "0.42"
+glam = "0.33"
+hat_units = { workspace = true }
+hat_sim = { workspace = true }
+hat_world = { workspace = true }
+
+[features]
+dev = ["bevy/dynamic_linking"]

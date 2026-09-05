@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests (sim, world, units)
+        run: cargo test -p hat_units -p hat_sim -p hat_world
+      - name: Perf budget (100k cars, one second of sim)
+        run: cargo test --release -p hat_sim hundred_thousand -- --ignored
+      - name: Build the game
+        run: cargo build -p hat_app

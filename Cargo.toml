@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+hat_units = { path = "crates/hat_units" }
+hat_sim = { path = "crates/hat_sim" }
+hat_world = { path = "crates/hat_world" }
+serde = { version = "1", features = ["derive"] }
+
+# Fast iteration: light optimization for our code, full for dependencies.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
