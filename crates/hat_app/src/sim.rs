@@ -65,7 +65,7 @@ pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Sim::load(2, 0))
+        app.insert_resource(Sim::load(std::env::var("HAT_SCENARIO").ok().and_then(|s| s.parse().ok()).unwrap_or(2), 0))
             .add_systems(FixedUpdate, step_sim)
             .add_systems(Update, handle_reload);
     }

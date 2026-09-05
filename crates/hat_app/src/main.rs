@@ -2,6 +2,7 @@
 
 mod audio;
 mod cab;
+mod debug;
 mod camera;
 mod input;
 mod render;
@@ -28,6 +29,6 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(EguiPlugin::default())
         .insert_resource(Time::<Fixed>::from_hz(120.0))
-        .add_plugins((sim::SimPlugin, camera::CameraPlugin, render::RenderPlugin, input::InputPlugin, ui::UiPlugin, audio::AudioPlugin, cab::CabPlugin))
+        .add_plugins((sim::SimPlugin, camera::CameraPlugin, render::RenderPlugin, input::InputPlugin, ui::UiPlugin, audio::AudioPlugin, cab::CabPlugin, debug::DebugPlugin))
         .run();
 }

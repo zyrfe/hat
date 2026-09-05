@@ -34,6 +34,12 @@ pub struct CabView {
     pub tex: egui::TextureId,
 }
 
+impl CabView {
+    pub fn image(&self) -> Handle<Image> {
+        self._image.clone()
+    }
+}
+
 #[derive(Component)]
 pub struct CabCamera;
 

@@ -79,9 +79,9 @@ fn hud(
         let project = |p: glam::DVec2| camera.world_to_viewport(cam_tf, sim_to_world(p) + Vec3::Y * 1.5).ok().map(|v| egui::pos2(v.x, v.y));
         let font = egui::FontId::proportional(if rig.distance < 700.0 { 15.0 } else { 12.0 });
         for t in &sim.yard.tracks {
-            let e = sim.world.graph.edge(t.edges[1]);
-            let end = sim.world.graph.node(e.b).pos;
-            let start = sim.world.graph.node(e.a).pos;
+            let (Some(&first), Some(&last)) = (t.edges.first(), t.edges.last()) else { continue };
+            let end = sim.world.graph.node(sim.world.graph.edge(last).b).pos;
+            let start = sim.world.graph.node(sim.world.graph.edge(first).a).pos;
             for p in [end + glam::DVec2::new(10.0, 0.0), start + glam::DVec2::new(-6.0, 0.0)] {
                 if let Some(sp) = project(p) {
                     painter.text(sp, egui::Align2::CENTER_CENTER, t.id.to_string(), font.clone(), Color32::WHITE);

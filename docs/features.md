@@ -167,6 +167,7 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Walking time and crew skill | M2 | idea | crew.md |
 | Dispatcher: road trains in and out through a portal, yard master assigning hump and sort jobs | M2 | done | traffic.rs; one road train at a time |
 | Terminal scenario runs unaided end to end as a test | M2 | done | inbound, hump, sort, load, unload, departure |
+| In-app screenshot hook: `HAT_SCREENSHOT=path` saves a frame after a few seconds and exits | M2 | done | works with the display asleep; for scripts and CI |
 | Asset manifest with placeholder flag and provenance; lineup sheet highlights placeholders | M1 | planned | art.md |
 | Normalization script: fit to sim box, flat facets, palette quantize, LODs | M1 | planned | Blender headless or Rust |
 | Placeholder mesh batch generation from a prompt list via hosted 3D generator | M1 | planned | |

@@ -40,7 +40,10 @@ cargo run --release -p hat_app          # the game, fullscreen (F11 toggles)
 cargo run -p hat_app --features dev     # fast-iteration build with dynamic linking
 ```
 
-Press F1 in the game for controls.
+Press F1 in the game for controls. `HAT_SCREENSHOT=out.png cargo run --release -p hat_app`
+saves one frame and exits, for quick visual checks from a script; it also writes `out.cab.png`
+from the cab camera, which renders offscreen and stays valid while the display sleeps.
+`HAT_SCENARIO=0|1|2` picks the starting scenario.
 
 ## Conventions
 
