@@ -64,7 +64,7 @@ fn hud(
     mut sel: ResMut<Selection>,
     mut ui_state: ResMut<UiState>,
     cam: Single<(&Camera, &GlobalTransform), With<MainCamera>>,
-    rig: Res<Rig>,
+    mut rig: ResMut<Rig>,
     cab: Option<Res<CabView>>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
@@ -377,6 +377,10 @@ fn hud(
         });
     });
 
+    // The map area is what the panels left over; the minimap sits in its corner.
+    let map_rect = root.available_rect_before_wrap();
+    minimap(ctx, sim, &mut rig, map_rect);
+
     if let Some(cab) = cab.as_deref() {
         cab_window(ctx, sim, cab, u);
     }
@@ -405,7 +409,9 @@ fn hud(
                  green stretched.\n\
                  \n\
                  View\n\
+                 left-drag on the ground  pan (a click still selects)\n\
                  arrows     pan    wheel  zoom    right-drag  orbit    middle-drag  pan\n\
+                 minimap    click or drag to jump the view there\n\
                  F          follow locomotive     Home  reset camera\n\
                  \n\
                  R          call the wreck crew for the selected derailed train\n\
@@ -784,4 +790,91 @@ fn ledger_panel(ui: &mut egui::Ui, sim: &Sim) {
             ui.small(&en.note);
         });
     }
+}
+
+/// Schematic overview in the corner of the map: track, trains, industries and where the
+/// camera is looking. Click or drag to move the view.
+fn minimap(ctx: &egui::Context, sim: &Sim, rig: &mut Rig, map_rect: egui::Rect) {
+    let g = &sim.world.graph;
+    let (min, max) = (sim.yard.min, sim.yard.max);
+    let span = max - min;
+    if span.x <= 0.0 || span.y <= 0.0 {
+        return;
+    }
+    let w = 420.0f32;
+    let pad = 8.0f32;
+    let scale = ((w - 2.0 * pad) as f64 / span.x).min(260.0 / span.y) as f32;
+    let h = (span.y as f32 * scale + 2.0 * pad).max(56.0);
+    let size = egui::vec2(w, h);
+    let pos = map_rect.right_bottom() - size - egui::vec2(12.0, 12.0);
+    egui::Area::new(egui::Id::new("minimap")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, Color32::from_black_alpha(190));
+        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
+        let origin = egui::pos2(rect.min.x + pad, rect.max.y - pad);
+        let to_px = |p: glam::DVec2| egui::pos2(origin.x + (p.x - min.x) as f32 * scale, origin.y - (p.y - min.y) as f32 * scale);
+        let from_px = |q: egui::Pos2| glam::DVec2::new(min.x + ((q.x - origin.x) / scale) as f64, min.y + ((origin.y - q.y) / scale) as f64);
+        // Track.
+        for e in &g.edges {
+            let color = if e.facility.is_some() {
+                Color32::from_rgb(240, 190, 80)
+            } else if e.track == Some(TRACK_MAIN) {
+                Color32::from_gray(170)
+            } else {
+                Color32::from_gray(120)
+            };
+            let pts: Vec<egui::Pos2> = match &e.geom {
+                Geometry::Straight { a, b } => vec![to_px(*a), to_px(*b)],
+                Geometry::Arc { .. } => (0..=12).map(|i| to_px(e.geom.pose(e.length * i as f64 / 12.0).pos)).collect(),
+            };
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, color)));
+        }
+        // Industries.
+        if let Some(econ) = sim.economy.as_ref() {
+            for ind in &econ.industries {
+                let c = to_px(ind.pos);
+                let color = match ind.commodity {
+                    Commodity::Coal => Color32::from_rgb(60, 60, 60),
+                    Commodity::Grain => Color32::from_rgb(220, 190, 90),
+                    _ => Color32::LIGHT_GRAY,
+                };
+                painter.rect_filled(egui::Rect::from_center_size(c, egui::vec2(6.0, 6.0)), 1.0, color);
+                painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(6.0, 6.0)), 1.0, egui::Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Outside);
+            }
+        }
+        // Trains, head to tail, the active one brighter.
+        let active_train = sim.loco_pos().map(|(ti, _)| ti);
+        for (ti, tr) in sim.world.trains.iter().enumerate() {
+            let n = tr.cars.len();
+            let (Some(a), Some(b)) = (sim.world.car_pose(tr, 0), sim.world.car_pose(tr, n - 1)) else { continue };
+            let color = if tr.derailed {
+                Color32::from_rgb(240, 70, 60)
+            } else if Some(ti) == active_train {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(255, 170, 60)
+            };
+            let (pa, pb) = (to_px(a.pos), to_px(b.pos));
+            painter.line_segment([pa, pb], egui::Stroke::new(3.0, color));
+            if pa.distance(pb) < 3.0 {
+                painter.circle_filled(pa, 2.5, color);
+            }
+        }
+        // Where the camera looks: its focus and roughly what it sees.
+        let focus = crate::camera::world_to_sim(rig.focus);
+        let fc = to_px(focus);
+        let half_w = rig.distance * 0.42 * (map_rect.width() / map_rect.height().max(1.0)) * scale;
+        let half_h = rig.distance * 0.42 / rig.pitch.sin().max(0.3) * scale;
+        let view = egui::Rect::from_center_size(fc, egui::vec2(2.0 * half_w, 2.0 * half_h)).intersect(rect.shrink(1.0));
+        painter.rect_stroke(view, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(110, 200, 120)), egui::StrokeKind::Inside);
+        if resp.clicked() || resp.dragged() {
+            if let Some(q) = resp.interact_pointer_pos() {
+                let p = from_px(q);
+                let p = glam::DVec2::new(p.x.clamp(min.x, max.x), p.y.clamp(min.y, max.y));
+                rig.focus = sim_to_world(p);
+                rig.follow = false;
+            }
+        }
+    });
 }

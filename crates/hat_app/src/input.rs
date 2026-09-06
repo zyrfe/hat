@@ -168,7 +168,8 @@ fn mouse_pick(
     mut sim: ResMut<Sim>,
     mut sel: ResMut<Selection>,
 ) {
-    if !buttons.just_pressed(MouseButton::Left) || ui.pointer_over_ui || time.elapsed_secs() < 0.5 {
+    // A click is a press and release without dragging; drags pan the map instead.
+    if !buttons.just_released(MouseButton::Left) || rig.drag_moved || rig.press_over_ui || ui.pointer_over_ui || time.elapsed_secs() < 0.5 {
         return;
     }
     let (camera, tf) = *cam;

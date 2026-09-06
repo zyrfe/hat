@@ -2,6 +2,7 @@
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::input::UiState;
@@ -23,11 +24,18 @@ pub struct Rig {
     pub pitch: f32,
     pub follow: bool,
     pub seen_generation: Option<u32>,
+    /// Ground point under the cursor when the left button went down, for drag-to-pan.
+    pub grab: Option<Vec3>,
+    pub grab_px: Vec2,
+    /// The press turned into a drag, so releasing it is not a click.
+    pub drag_moved: bool,
+    /// The press landed on the UI, so releasing it is not a click on the map.
+    pub press_over_ui: bool,
 }
 
 impl Default for Rig {
     fn default() -> Self {
-        Rig { focus: Vec3::new(60.0, 0.0, -14.0), distance: 260.0, yaw: 0.0, pitch: 60f32.to_radians(), follow: false, seen_generation: None }
+        Rig { focus: Vec3::new(60.0, 0.0, -14.0), distance: 260.0, yaw: 0.0, pitch: 60f32.to_radians(), follow: false, seen_generation: None, grab: None, grab_px: Vec2::ZERO, drag_moved: false, press_over_ui: false }
     }
 }
 
@@ -93,9 +101,11 @@ fn control(
     time: Res<Time>,
     ui: Res<UiState>,
     sim: Res<Sim>,
+    window: Single<&Window, With<PrimaryWindow>>,
     mut rig: ResMut<Rig>,
-    mut cam: Single<&mut Transform, With<MainCamera>>,
+    mut cam: Single<(&Camera, &GlobalTransform, &mut Transform), With<MainCamera>>,
 ) {
+    let (camera, cam_global, cam_tf) = &mut *cam;
     if rig.seen_generation != Some(sim.generation) {
         rig.seen_generation = Some(sim.generation);
         let lead = sim.world.graph.node(sim.yard.lead_switch).pos;
@@ -134,6 +144,31 @@ fn control(
         rig.focus -= right * pan;
         moved = true;
     }
+    // Left-drag on the ground grabs the map: the point under the cursor stays under it.
+    if buttons.just_pressed(MouseButton::Left) {
+        rig.press_over_ui = ui.pointer_over_ui;
+        rig.drag_moved = false;
+        rig.grab = if ui.pointer_over_ui { None } else { cursor_ground(&window, camera, cam_global) };
+        rig.grab_px = window.cursor_position().unwrap_or_default();
+    }
+    if buttons.pressed(MouseButton::Left) {
+        if let Some(grab) = rig.grab {
+            let px = window.cursor_position().unwrap_or(rig.grab_px);
+            if !rig.drag_moved && px.distance(rig.grab_px) > 4.0 {
+                rig.drag_moved = true;
+            }
+            if rig.drag_moved {
+                if let Some(now) = cursor_ground(&window, camera, cam_global) {
+                    let mut d = grab - now;
+                    d.y = 0.0;
+                    rig.focus += d;
+                    moved = true;
+                }
+            }
+        }
+    } else {
+        rig.grab = None;
+    }
     if !ui.pointer_over_ui {
         if scroll.delta.y != 0.0 {
             let factor = match scroll.unit {
@@ -170,5 +205,5 @@ fn control(
         }
     }
     rig.focus.y = 0.0;
-    **cam = rig.transform();
+    **cam_tf = rig.transform();
 }
