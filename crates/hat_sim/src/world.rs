@@ -239,6 +239,109 @@ impl World {
         Ok(())
     }
 
+    /// Put a derailed train back on the rails where it stands. The switches under it are
+    /// lined for its wheels, the way a wreck crew lines them before jacking. Fails when the
+    /// cars overlap another train that is not itself derailed: clear that first.
+    pub fn rerail(&mut self, id: TrainId) -> Result<usize, &'static str> {
+        let idx = self.train_index(id).ok_or("no such train")?;
+        if !self.trains[idx].derailed {
+            return Err("that train is on the rails");
+        }
+        // Line every switch along and at the ends of the path to match the path.
+        let path = self.trains[idx].path.clone();
+        for w in path.windows(2) {
+            let e0 = self.graph.edge(w[0].edge);
+            let node = if w[0].forward { e0.b } else { e0.a };
+            self.line_for(node, w[0].edge, Some(w[1].edge));
+        }
+        if let (Some(first), Some(last)) = (path.first(), path.last()) {
+            let ef = self.graph.edge(first.edge);
+            let tail_node = if first.forward { ef.a } else { ef.b };
+            self.line_for(tail_node, first.edge, None);
+            let el = self.graph.edge(last.edge);
+            let head_node = if last.forward { el.b } else { el.a };
+            self.line_for(head_node, last.edge, None);
+        }
+        // Make room: back away from any train the cars overlap.
+        for _ in 0..4 {
+            let Some((toward_head, overlap)) = self.overlap_with_others(idx) else { break };
+            let shift = overlap + CONTACT_EPS;
+            let tr = &mut self.trains[idx];
+            for c in &mut tr.cars {
+                c.x += if toward_head { -shift } else { shift };
+            }
+            let World { graph, car_types, trains, .. } = self;
+            let tr = &mut trains[idx];
+            if tr.extend_head(graph, car_types) != EndResult::Ok || tr.extend_tail(graph, car_types) != EndResult::Ok {
+                return Err("no room to rerail here: clear the track around it first");
+            }
+            tr.retract(graph, car_types);
+        }
+        if self.overlap_with_others(idx).is_some() {
+            return Err("no room to rerail here: clear the track around it first");
+        }
+        let tr = &mut self.trains[idx];
+        let n = tr.cars.iter().filter(|c| c.derailed).count();
+        for c in &mut tr.cars {
+            c.derailed = false;
+            c.v = 0.0;
+        }
+        tr.derailed = false;
+        let pos = tr.pose_at(&self.graph, tr.cars[0].x).map(|p| p.pos).unwrap_or_default();
+        self.events.push(SimEvent::Rerailed { train: id, pos, cars: n });
+        Ok(n)
+    }
+
+    /// Set the turnout at `node` so that a train on `from` passes through it, onto `to` when
+    /// given. No-op for plain nodes and bumpers.
+    fn line_for(&mut self, node: NodeId, from: EdgeId, to: Option<EdgeId>) {
+        let NodeKind::Turnout { toe, normal, diverging, .. } = self.graph.node(node).kind.clone() else { return };
+        let want = if from == toe {
+            match to {
+                Some(e) if e == diverging => Route::Diverging,
+                _ => Route::Normal,
+            }
+        } else if from == normal {
+            Route::Normal
+        } else if from == diverging {
+            Route::Diverging
+        } else {
+            return;
+        };
+        self.graph.set_route(node, want);
+    }
+
+    /// Largest overlap between train `idx` and any other train, and whether the other train
+    /// lies toward this train's head.
+    fn overlap_with_others(&self, idx: usize) -> Option<(bool, f64)> {
+        let ivs = self.edge_intervals();
+        let mine: Vec<&(usize, EdgeId, f64, f64)> = ivs.iter().filter(|iv| iv.0 == idx).collect();
+        let tr = &self.trains[idx];
+        let mut best: Option<(bool, f64)> = None;
+        for &(ti, e, s0, s1) in &ivs {
+            if ti == idx {
+                continue;
+            }
+            for m in &mine {
+                if m.1 != e {
+                    continue;
+                }
+                let ov = s1.min(m.3) - s0.max(m.2);
+                if ov > OVERLAP_DERAIL * 0.5 && best.map_or(true, |b| ov > b.1) {
+                    // Which way along the path does the other train lie?
+                    let seg = tr.path.iter().position(|p| p.edge == e).unwrap_or(0);
+                    let start = tr.seg_start_x(&self.graph, seg);
+                    let len = self.graph.edge(e).length;
+                    let other_mid = 0.5 * (s0 + s1);
+                    let other_x = if tr.path[seg].forward { start + other_mid } else { start + (len - other_mid) };
+                    let mine_mid = 0.5 * (tr.head_face_x(&self.car_types) + tr.tail_face_x(&self.car_types));
+                    best = Some((other_x > mine_mid, ov));
+                }
+            }
+        }
+        best
+    }
+
     fn split(&mut self, idx: usize, k: usize) -> TrainId {
         let new_id = self.next_train;
         self.next_train += 1;
@@ -667,11 +770,13 @@ fn nearest_car(tr: &Train, graph: &TrackGraph, edge: EdgeId, s: f64) -> usize {
 fn derail_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], car_idx: usize, cause: DerailCause, events: &mut Vec<SimEvent>) {
     let _ = types;
     train.derailed = true;
+    let car_idx = car_idx.min(train.cars.len() - 1);
+    let v = train.cars[car_idx].v.abs();
     for c in &mut train.cars {
         c.v = 0.0;
     }
-    let car_idx = car_idx.min(train.cars.len() - 1);
     train.cars[car_idx].derailed = true;
+    train.cars[car_idx].damage += DERAIL_DAMAGE + DERAIL_DAMAGE_PER_MPS * v;
     let pos = train.pose_at(graph, train.cars[car_idx].x).map(|p| p.pos).unwrap_or_default();
     events.push(SimEvent::Derail { pos, cause, train: train.id });
 }
@@ -751,6 +856,7 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
                 let notch = controls.throttle.min(8) as f64 / 8.0;
                 let te = (spec.power_rail / car.v.abs().max(0.5)).min(spec.adhesion * m * G);
                 drive += r * notch * te;
+                car.work_j += notch * te * car.v.abs() * dt;
             }
             ind = controls.independent.clamp(0.0, 1.0) * spec.independent_max;
         }
@@ -1112,6 +1218,34 @@ mod tests {
         assert!(w.train(id).unwrap().cars[0].v < -0.5, "released cars should roll downhill, v = {}", w.train(id).unwrap().cars[0].v);
     }
 
+    /// A flood loader is one chute: cars fill as they creep under it, and it stops when the
+    /// mine's stockpile is gone.
+    #[test]
+    fn spot_loader_fills_cars_passing_under_it_until_the_stock_runs_out() {
+        let mut w = straight_world(3000.0);
+        let mut fac = Facility::load(Commodity::Coal, 2500.0, FacilityMode::Spot { s: 1000.0, max_speed: 0.6 });
+        fac.budget = 200_000.0;
+        fac.industry = Some(7);
+        w.graph.edges[0].facility = Some(fac);
+        let mut cars = vec![loco(&mut w)];
+        cars.extend(hoppers(&mut w, 3, 0.0, Brake::charged()));
+        let id = w.spawn_train(cars, 0, 900.0, true).unwrap();
+        for _ in 0..(800.0 / DT) as usize {
+            for c in &mut w.train_mut(id).unwrap().cars {
+                c.v = 0.3;
+            }
+            w.step(DT);
+        }
+        let tr = w.train(id).unwrap();
+        let payloads: Vec<f64> = tr.cars[1..].iter().map(|c| c.m_payload).collect();
+        assert!(payloads[0] > 104_000.0, "first car full: {payloads:?}");
+        assert!((payloads[0] + payloads[1] + payloads[2] - 200_000.0).abs() < 1.0, "stock limits the total: {payloads:?}");
+        assert!(payloads[2] < 1.0, "third car gets nothing: {payloads:?}");
+        assert_eq!(tr.cars[1].origin, Some(7));
+        assert_eq!(w.events.iter().filter(|e| matches!(e, SimEvent::Loaded { .. })).count(), 1);
+        assert!(w.graph.edges[0].facility.unwrap().budget < 1.0);
+    }
+
     #[test]
     fn bumper_stops_a_slow_train_without_derailing() {
         let mut w = straight_world(1200.0);
@@ -1196,6 +1330,23 @@ impl World {
     pub fn current_limit(&self, train: &Train) -> Option<f64> {
         let loc = train.locate(&self.graph, train.cars[0].x)?;
         Some(self.graph.edge(loc.edge).speed_limit)
+    }
+
+    /// The slowest limit under any part of the train: what the whole train may do.
+    pub fn train_limit(&self, train: &Train) -> Option<f64> {
+        let types = &self.car_types;
+        let head = train.head_face_x(types);
+        let tail = train.tail_face_x(types);
+        let mut start = train.path_origin;
+        let mut limit = f64::INFINITY;
+        for seg in &train.path {
+            let e = self.graph.edge(seg.edge);
+            if start + e.length > tail && start < head {
+                limit = limit.min(e.speed_limit);
+            }
+            start += e.length;
+        }
+        limit.is_finite().then_some(limit)
     }
 }
 
@@ -1361,45 +1512,71 @@ impl World {
     fn process_facilities(&mut self, dt: f64) {
         let World { graph, car_types, trains, events, cargo_loaded, cargo_unloaded, .. } = self;
         for tr in trains.iter_mut() {
+            if tr.derailed {
+                continue;
+            }
             let n = tr.cars.len();
             for i in 0..n {
                 let Some(loc) = tr.locate(graph, tr.cars[i].x) else { continue };
-                let Some(fac) = graph.edge(loc.edge).facility else { continue };
+                if graph.edges[loc.edge as usize].facility.is_none() {
+                    continue;
+                }
+                let pos = graph.pose_on_edge(loc.edge, loc.s).pos;
+                let Some(fac) = graph.edges[loc.edge as usize].facility.as_mut() else { continue };
                 let ct = &car_types[tr.cars[i].type_id as usize];
-                if ct.is_loco() || ct.m_payload_max <= 0.0 {
+                if ct.is_loco() || ct.m_payload_max <= 0.0 || fac.budget <= 0.0 {
                     continue;
                 }
                 let car = &mut tr.cars[i];
-                match fac {
-                    Facility::Load { commodity, rate, max_speed } => {
-                        if car.v.abs() > max_speed || car.m_payload >= ct.m_payload_max {
+                if car.v.abs() > fac.max_speed() {
+                    continue;
+                }
+                if let Some(spot) = fac.spot() {
+                    if (loc.s - spot).abs() > 0.5 * ct.length {
+                        continue;
+                    }
+                }
+                match fac.kind {
+                    FacilityKind::Load(commodity) => {
+                        if car.m_payload >= ct.m_payload_max {
                             continue;
                         }
                         if car.commodity != Commodity::Empty && car.commodity != commodity {
                             continue;
                         }
-                        let add = (rate * dt).min(ct.m_payload_max - car.m_payload);
+                        let add = (fac.rate * dt).min(ct.m_payload_max - car.m_payload).min(fac.budget);
                         car.m_payload += add;
                         car.commodity = commodity;
+                        car.origin = fac.industry;
+                        fac.budget -= add;
                         *cargo_loaded += add;
                         if car.m_payload >= ct.m_payload_max - 1e-6 {
-                            let pos = graph.pose_on_edge(loc.edge, loc.s).pos;
-                            events.push(SimEvent::Loaded { car: car.id, pos, mass: car.m_payload });
+                            car.m_payload = ct.m_payload_max;
+                            events.push(SimEvent::Loaded { car: car.id, pos, mass: car.m_payload, commodity, industry: fac.industry });
                         }
                     }
-                    Facility::Unload { rate, max_speed } => {
-                        if car.v.abs() > max_speed || car.m_payload <= 0.0 {
+                    FacilityKind::Unload(want) => {
+                        if car.m_payload <= 0.0 {
                             continue;
                         }
-                        let take = (rate * dt).min(car.m_payload);
+                        if let Some(w) = want {
+                            if car.commodity != w {
+                                continue;
+                            }
+                        }
+                        let take = (fac.rate * dt).min(car.m_payload).min(fac.budget);
                         car.m_payload -= take;
+                        car.delivered_acc += take;
+                        fac.budget -= take;
                         *cargo_unloaded += take;
                         if car.m_payload <= 1e-6 {
                             car.m_payload = 0.0;
-                            let mass = ct.m_payload_max;
+                            let mass = car.delivered_acc;
+                            car.delivered_acc = 0.0;
+                            let commodity = car.commodity;
+                            let origin = car.origin.take();
                             car.commodity = Commodity::Empty;
-                            let pos = graph.pose_on_edge(loc.edge, loc.s).pos;
-                            events.push(SimEvent::Unloaded { car: car.id, pos, mass });
+                            events.push(SimEvent::Unloaded { car: car.id, pos, mass, commodity, industry: fac.industry, origin });
                         }
                     }
                 }

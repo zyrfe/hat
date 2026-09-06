@@ -117,13 +117,64 @@ pub enum NodeKind {
     Turnout { toe: EdgeId, normal: EdgeId, diverging: EdgeId, setting: Route },
 }
 
+/// What a facility does to a car.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FacilityKind {
+    /// Fills empty cars, or cars already carrying this commodity.
+    Load(crate::Commodity),
+    /// Empties cars. `None` takes anything.
+    Unload(Option<crate::Commodity>),
+}
+
+/// Where on the edge a facility works.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FacilityMode {
+    /// Every car on the edge is worked while slower than `max_speed`: a team track with a crew.
+    Track { max_speed: f64 },
+    /// One chute or pit at `s` along the edge. The car centred under it is worked while slower
+    /// than `max_speed`. A flood loader allows a creep; a spout wants the car standing.
+    Spot { s: f64, max_speed: f64 },
+}
+
 /// Something trackside that changes cars standing or creeping on an edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Facility {
-    /// Fills cars that can take the commodity, kg/s per car, while slower than `max_speed`.
-    Load { commodity: crate::Commodity, rate: f64, max_speed: f64 },
-    /// Empties cars, kg/s per car, while slower than `max_speed`.
-    Unload { rate: f64, max_speed: f64 },
+pub struct Facility {
+    pub kind: FacilityKind,
+    /// kg/s per car being worked.
+    pub rate: f64,
+    pub mode: FacilityMode,
+    /// The industry this belongs to, if any.
+    pub industry: Option<u32>,
+    /// Stock left to load, or room left to unload, kg. Infinite unless an industry sets it.
+    pub budget: f64,
+}
+
+impl Facility {
+    pub fn load(commodity: crate::Commodity, rate: f64, mode: FacilityMode) -> Self {
+        Facility { kind: FacilityKind::Load(commodity), rate, mode, industry: None, budget: f64::INFINITY }
+    }
+    pub fn unload(commodity: Option<crate::Commodity>, rate: f64, mode: FacilityMode) -> Self {
+        Facility { kind: FacilityKind::Unload(commodity), rate, mode, industry: None, budget: f64::INFINITY }
+    }
+    pub fn for_industry(mut self, id: u32) -> Self {
+        self.industry = Some(id);
+        self
+    }
+    pub fn max_speed(&self) -> f64 {
+        match self.mode {
+            FacilityMode::Track { max_speed } | FacilityMode::Spot { max_speed, .. } => max_speed,
+        }
+    }
+    /// Position of the chute or pit along the edge, if it has one.
+    pub fn spot(&self) -> Option<f64> {
+        match self.mode {
+            FacilityMode::Spot { s, .. } => Some(s),
+            FacilityMode::Track { .. } => None,
+        }
+    }
+    pub fn is_load(&self) -> bool {
+        matches!(self.kind, FacilityKind::Load(_))
+    }
 }
 
 #[derive(Clone, Debug)]

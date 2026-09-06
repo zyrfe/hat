@@ -61,6 +61,7 @@ pub const TYPE_TANK: CarTypeId = 3;
 pub const TYPE_BOXCAR: CarTypeId = 4;
 pub const TYPE_GONDOLA: CarTypeId = 5;
 pub const TYPE_FLATCAR: CarTypeId = 6;
+pub const TYPE_ROAD_LOCO: CarTypeId = 7;
 
 impl CarType {
     pub fn is_loco(&self) -> bool {
@@ -87,6 +88,17 @@ impl CarType {
             CarType { name: "Boxcar", kind: CarKind::Boxcar, length: 18.6, width: 3.2, height: 4.7, m_tare: 30_000.0, m_payload_max: 70_000.0, n_axles: 4, loco: None },
             CarType { name: "Gondola", kind: CarKind::Gondola, length: 16.5, width: 3.2, height: 2.6, m_tare: 28_000.0, m_payload_max: 100_000.0, n_axles: 4, loco: None },
             CarType { name: "Flatcar", kind: CarKind::Flatcar, length: 27.4, width: 3.2, height: 1.4, m_tare: 30_000.0, m_payload_max: 70_000.0, n_axles: 4, loco: None },
+            CarType {
+                name: "Road unit",
+                kind: CarKind::Locomotive,
+                length: 22.3,
+                width: 3.1,
+                height: 4.7,
+                m_tare: 192_000.0,
+                m_payload_max: 0.0,
+                n_axles: 6,
+                loco: Some(LocoSpec { power_rail: 3_200_000.0, adhesion: 0.30, independent_max: 0.25 * 192_000.0 * G }),
+            },
         ]
     }
 }
@@ -138,6 +150,12 @@ pub struct CarState {
     /// The car each end was just parted from. That pair will not re-couple until they have
     /// actually separated, so a loose car can be shoved without re-locking the knuckle.
     pub no_couple_with: [Option<CarId>; 2],
+    /// Industry whose facility loaded the payload, for freight settlement.
+    pub origin: Option<u32>,
+    /// Payload unloaded since the last Unloaded event, kg.
+    pub delivered_acc: f64,
+    /// Tractive work done at the rail by this car, J. Locomotives only. Fuel follows from it.
+    pub work_j: f64,
 }
 
 impl CarState {
@@ -158,6 +176,9 @@ impl CarState {
             facing_head: true,
             no_couple_until: [0.0, 0.0],
             no_couple_with: [None, None],
+            origin: None,
+            delivered_acc: 0.0,
+            work_j: 0.0,
         }
     }
 

@@ -30,7 +30,9 @@ pub enum SimEvent {
     HosesConnected { train: TrainId, pos: DVec2 },
     AirBottled { train: TrainId, pos: DVec2 },
     /// A car finished loading at a facility.
-    Loaded { car: CarId, pos: DVec2, mass: f64 },
-    /// A car finished unloading at a facility.
-    Unloaded { car: CarId, pos: DVec2, mass: f64 },
+    Loaded { car: CarId, pos: DVec2, mass: f64, commodity: crate::Commodity, industry: Option<u32> },
+    /// A car finished unloading at a facility. `mass` is what came out of it here.
+    Unloaded { car: CarId, pos: DVec2, mass: f64, commodity: crate::Commodity, industry: Option<u32>, origin: Option<u32> },
+    /// A wreck crew put a derailed train back on the rails.
+    Rerailed { train: TrainId, pos: DVec2, cars: usize },
 }

@@ -2,7 +2,9 @@
 
 use hat_sim::*;
 
+use crate::branch::*;
 use crate::crew::*;
+use crate::economy::Economy;
 use crate::terminal::*;
 use crate::traffic::Dispatcher;
 use crate::yard::*;
@@ -24,6 +26,8 @@ pub enum ScenarioKind {
     Double,
     /// The terminal: road trains in and out, hump, loader and dumper.
     Terminal,
+    /// Open country: industries on a loop, trains on schedules, money.
+    Branch,
 }
 
 #[derive(Clone, Debug)]
@@ -149,8 +153,22 @@ pub fn terminal() -> Scenario {
     }
 }
 
+pub fn branch() -> Scenario {
+    Scenario {
+        name: "Branch",
+        kind: ScenarioKind::Branch,
+        description: "A mine, a power plant, three elevators and a harbour on one loop. Two trains with schedules, a switcher in the yard, and a bank balance. Shippers pay what trucking would cost them; you pay for fuel, crews, cars, track and wrecks.",
+        yard: YardParams::default(),
+        inbound: Vec::new(),
+        inbound_tail_offset: 0.0,
+        loco_offset: 0.0,
+        inbound_charged: true,
+        time_budget: 24.0 * 3600.0,
+    }
+}
+
 pub fn all_scenarios() -> Vec<Scenario> {
-    vec![yard_shift(), doubling(), terminal()]
+    vec![yard_shift(), doubling(), terminal(), branch()]
 }
 
 /// The built world plus what the app needs to know about it.
@@ -162,6 +180,62 @@ pub struct Built {
     pub dispatcher: Option<Dispatcher>,
     /// What the yard crew starts doing on Auto.
     pub initial_program: Program,
+    /// Money and industries, for open-country scenarios.
+    pub economy: Option<Economy>,
+    /// Road trains with their own crews and schedules.
+    pub road_crews: Vec<Crew>,
+}
+
+/// A charged, laced train of one locomotive type and `n` cars of `car_type`, head first.
+fn road_train(world: &mut World, loco_type: CarTypeId, car_type: CarTypeId, n: usize) -> Vec<CarState> {
+    let mut cars = Vec::with_capacity(n + 1);
+    let mut l = world.new_car(loco_type);
+    l.brake = Brake::charged();
+    cars.push(l);
+    for _ in 0..n {
+        let mut c = world.new_car(car_type);
+        c.brake = Brake::charged();
+        cars.push(c);
+    }
+    cars
+}
+
+fn build_branch_scenario() -> Built {
+    let BranchWorld { graph, yard, industries } = build_branch(&BranchParams::default());
+    let mut world = World::new(graph);
+    let economy = Economy::new(industries, &world.graph, 25_000_000);
+    let mut road_crews = Vec::new();
+    let place = |world: &mut World, track: u32, cars: Vec<CarState>| -> TrainId {
+        let yt = yard.track(track).expect("yard track");
+        let straight = yt.edges[1];
+        let len = world.graph.edge(straight).length;
+        let id = world.spawn_train(cars, straight, len - 15.0, true).expect("train fits on its yard track");
+        let tr = world.train_mut(id).unwrap();
+        for h in &mut tr.hoses {
+            *h = true;
+        }
+        world.set_controls(id, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
+        id
+    };
+    let coal_cars = road_train(&mut world, TYPE_ROAD_LOCO, TYPE_OPEN_HOPPER, 30);
+    let coal = place(&mut world, 1, coal_cars);
+    let grain_cars = road_train(&mut world, TYPE_ROAD_LOCO, TYPE_COVERED_HOPPER, 12);
+    let grain = place(&mut world, 2, grain_cars);
+    let coal_car = world.train(coal).unwrap().cars[0].id;
+    let grain_car = world.train(grain).unwrap().cars[0].id;
+    road_crews.push(Crew::new("Coal 1", coal_car, Crew::run_job(&yard, vec![Order::Load { track: TRACK_MINE, full: true }, Order::Unload { track: TRACK_PLANT }], true), 0.0));
+    let mut grain_orders: Vec<Order> = (1..=3).map(|k| Order::Load { track: TRACK_ELEVATOR_BASE + k, full: false }).collect();
+    grain_orders.push(Order::Unload { track: TRACK_GRAIN_TERMINAL });
+    road_crews.push(Crew::new("Grain 1", grain_car, Crew::run_job(&yard, grain_orders, true), 0.0));
+    // A switcher for the player, idle on track 4.
+    let mut sw = world.new_car(TYPE_SWITCHER);
+    sw.brake = Brake::charged();
+    sw.knuckle_open = [true, true];
+    let t4 = yard.track(4).unwrap().edges[1];
+    let len = world.graph.edge(t4).length;
+    let loco = world.spawn_train(vec![sw], t4, len * 0.5, true).expect("switcher fits");
+    world.set_controls(loco, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
+    Built { world, yard, loco, inbound: None, dispatcher: None, initial_program: Program::Idle, economy: Some(economy), road_crews }
 }
 
 fn build_terminal_scenario() -> Built {
@@ -178,12 +252,15 @@ fn build_terminal_scenario() -> Built {
     let loco = world.spawn_train(vec![l], approach_edge, len - 60.0, true).expect("switcher fits on the approach");
     world.set_controls(loco, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
     let dispatcher = Dispatcher::new(yard.clone());
-    Built { world, yard, loco, inbound: None, dispatcher: Some(dispatcher), initial_program: Program::Idle }
+    Built { world, yard, loco, inbound: None, dispatcher: Some(dispatcher), initial_program: Program::Idle, economy: None, road_crews: Vec::new() }
 }
 
 pub fn build(sc: &Scenario) -> Built {
     if sc.kind == ScenarioKind::Terminal {
         return build_terminal_scenario();
+    }
+    if sc.kind == ScenarioKind::Branch {
+        return build_branch_scenario();
     }
     let (graph, yard) = build_ladder_yard(&sc.yard);
     let mut world = World::new(graph);
@@ -217,7 +294,7 @@ pub fn build(sc: &Scenario) -> Built {
     world.set_controls(loco, Controls { reverser: Reverser::Forward, independent: 1.0, ..Default::default() });
 
     let initial_program = Crew::sort_job(&yard, None);
-    Built { world, yard, loco, inbound: Some(inbound), dispatcher: None, initial_program }
+    Built { world, yard, loco, inbound: Some(inbound), dispatcher: None, initial_program, economy: None, road_crews: Vec::new() }
 }
 
 #[cfg(test)]
@@ -231,6 +308,12 @@ mod tests {
             if sc.kind == ScenarioKind::Terminal {
                 assert_eq!(b.world.trains.len(), 1);
                 assert!(b.dispatcher.is_some());
+                continue;
+            }
+            if sc.kind == ScenarioKind::Branch {
+                assert_eq!(b.world.trains.len(), 3);
+                assert_eq!(b.road_crews.len(), 2);
+                assert!(b.economy.is_some());
                 continue;
             }
             assert_eq!(b.world.trains.len(), 2, "{}", sc.name);

@@ -72,6 +72,9 @@ pub const HAND_BRAKE_RATIO: f64 = 0.02;
 pub const BUMPER_DAMAGE_SPEED: f64 = 1.0;
 pub const OVERSPEED_DERAIL_FACTOR: f64 = 1.5;
 pub const OVERLAP_DERAIL: f64 = 0.3;
+/// Damage a derailed car takes: a flat amount plus a share per m/s it was doing.
+pub const DERAIL_DAMAGE: f64 = 0.5;
+pub const DERAIL_DAMAGE_PER_MPS: f64 = 0.2;
 
 pub const V_EPS: f64 = 1e-3;
 

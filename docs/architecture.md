@@ -14,7 +14,7 @@ touches one crate.
 |---|---|---|
 | `hat_units` | nothing | SI constants, conversion constants, display formatting |
 | `hat_sim` | `hat_units` | Track graph (nodes, straight and arc edges, turnouts), train paths, train dynamics, couplers, brakes, car model, derail checks, contacts. Pure Rust, deterministic, unit tested. No Bevy. |
-| `hat_world` | `hat_sim` | Yard generators, scenarios, scoring. Later: splines, terrain heightfield and strata, structures, projects, economy |
+| `hat_world` | `hat_sim` | Yard and map generators, scenarios, scoring, crews and schedules, the graph router, industries, the ledger, the wreck crew. Later: splines, terrain heightfield and strata, structures, projects |
 | `hat_app` | all, Bevy | Rendering, camera, input, UI, audio, particles, wreck physics, save/load |
 
 Third party:

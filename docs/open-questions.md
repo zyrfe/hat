@@ -5,6 +5,9 @@ relevant doc and delete it here.
 
 ## Design
 
+Resolved into ADRs since the last pass: time scale (ADR-0010), money (ADR-0009), interchange
+(ADR-0011, proposed).
+
 - The Engineer as a character. The cab window carries a reactive portrait now. Later: a crew
   model with names, skills, fatigue and hours of service, Kerbal-style reactions, maybe Star
   Control-style dialogue. Where does it live (hat_world), and how much personality before it
@@ -13,13 +16,15 @@ relevant doc and delete it here.
 - Map scale. Real geography at 1:1 makes a 100 km line feel right for 3 km trains but is
   slow to traverse in play. A compressed scale breaks the "no cheating" pillar if
   terminals shrink but trains do not. Leaning 1:1 with time acceleration.
-- Time scale. Sim seconds vs. game clock. Loading a unit train takes hours in reality.
-  Options: real time with fast-forward, or a fixed ratio like 1 sim second = 10 game seconds
-  with physics unchanged.
-- Economy. Money, or materials and labor only? Contracts as the main goal driver?
 - Passenger service at all? Not in the first five milestones.
-- Interchange at the map edge as the source of rolling stock and rail steel, or on-map
-  industry for everything?
+- Two-way traffic. The Branch loop runs one way so no train ever meets another. Meets need
+  blocks, a dispatcher and sidings; where does the player sit in that?
+- Order semantics. "Load" takes what is there and "load full" waits. Real shuttles want
+  "load N cars", "wait for the block", "spot and pull". How rich before it is a program?
+- Prices. Trucking at 0.15 $/t·km with 3 $/t handling makes a 4 km lane pay about 5 $/t.
+  Fine for a start; a bigger map or a "hills and bad roads" factor is the lever.
+- The wreck crew. A timer today. A train with a crane under M6, which means the player can
+  be too broke or too blocked to recover a wreck.
 
 ## Technical
 

@@ -11,6 +11,9 @@ use crate::params::*;
 use crate::track::*;
 use crate::TrainId;
 
+/// Brake handle moves remembered for the pipe's signal delay. Enough for a mile of pipe.
+const MAX_PIPE_CMDS: usize = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Reverser {
     Reverse,
@@ -333,13 +336,18 @@ impl Train {
     }
 
     pub fn push_pipe_cmd(&mut self, t: f64, target: f64, emergency: bool) {
-        if let Some(last) = self.pipe_cmds.back() {
+        if let Some(last) = self.pipe_cmds.back_mut() {
             if last.target == target && last.emergency == emergency {
+                return;
+            }
+            // A handle moved twice within a tenth of a second is one move as far as the pipe knows.
+            if t - last.t < 0.1 && !last.emergency && !emergency {
+                last.target = target;
                 return;
             }
         }
         self.pipe_cmds.push_back(PipeCmd { t, target, emergency });
-        while self.pipe_cmds.len() > 2 && self.pipe_cmds[1].t < t - 60.0 {
+        while self.pipe_cmds.len() > 2 && (self.pipe_cmds[1].t < t - 60.0 || self.pipe_cmds.len() > MAX_PIPE_CMDS) {
             self.pipe_cmds.pop_front();
         }
     }

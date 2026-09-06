@@ -38,6 +38,22 @@ step, each reporting done or failed:
 The playthrough test in `hat_world` already implements CoupleTo, PullClear, Route and Kick as
 a script. The executor is that code made into a resumable machine.
 
+## Schedules
+
+Road trains carry an order list instead of a switch list: go to a track, load at a track,
+load full, unload at a track, repeat. The `Run` program plans each leg with the graph router
+(Dijkstra over edge-and-direction states, so a leg never reverses; it prefers the direction
+with the locomotive leading unless that is much longer), then runs a single
+route-and-drive maneuver: switches within two kilometres are thrown as the train
+approaches, switches that cannot be thrown yet hold the train fifteen metres short until
+they can, and a switch the train's own tail still occupies simply waits for the tail.
+
+At the facility the mode decides the work. A chute or pit the train may creep under is
+taken in one pass at the speed that fills or empties each car before it is past, on the
+independent brake alone so the pipe stays quiet. A spout that wants standing cars gets each
+car spotted in turn, and the crew leaves when the pile is empty unless the order said full.
+The order editor lives in the Trains panel; editing re-plans from the current order.
+
 ## Manual override
 
 The cab levers stay live. Touching a lever pauses the executor ("You have the engine") and
@@ -69,6 +85,12 @@ program bleeds the receiving cut, shoves it to the crest and cuts each car on th
 momentum carries it over, spacing cuts until the previous car is off the hump. Road crews
 bring trains in through the portal and take departures out. A dispatcher hands the yard crew
 its next job. Kicks, digging and more than one road train at a time are not in yet.
+
+Second version 2026-09-06: schedules and the router, so several road trains run their own
+order lists on the Branch map. Each crew is a separate `Crew` and the player takes any
+engine by clicking it. A whole-train speed limit stops a crew from accelerating on the main
+while its cars are still in the yard curves. See [economy.md](economy.md) for what the
+trains are paid for.
 
 ## Build order
 

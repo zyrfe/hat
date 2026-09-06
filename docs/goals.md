@@ -33,7 +33,24 @@ Done when:
 - A hump with retarders sorts a cut into bowl tracks. Kicks in a flat yard work.
 - Sound events for couplers, joints, frogs and air, with viewport culling and voice caps.
 
-## M2 Mainline: dispatching and long trains
+## M2 Trade: industries, schedules and money
+
+Built 2026-09-06 as the Branch scenario. Pulled ahead of Mainline because the economy is
+what turns terminals into a game; see [economy.md](economy.md), ADR-0009 and ADR-0010.
+
+Done when:
+- Industries with stockpiles produce and consume on their own clock; facilities move only
+  what the pile holds or the plant has room for. Done.
+- Shippers pay the trucking alternative, never distance; unserved industries truck and
+  remember. Done.
+- Road trains run editable order lists over a router that lines switches on the way. Done.
+- Running costs come out of the sim: fuel from tractive work, crew hours, car-days,
+  track-km. Done.
+- Derailments are recovered by a wreck crew that takes time and money. Done.
+- Equipment arrives through the interchange after a delay (ADR-0011). Not yet.
+- One clock, compressed to 60x, with the Branch world under 15 us a step. Done.
+
+## M3 Mainline: dispatching and long trains
 
 Done when:
 - Signal blocks, path reservation, sidings, meets, timetables and interrupts in an egui UI.
@@ -43,7 +60,7 @@ Done when:
 - Lateral motion: sway, hunting, joint and frog excitation, visible and audible.
 - Car model carries payload and center of gravity, and derail checks use it.
 
-## M3 Dirt: terrain and earthworks
+## M4 Dirt: terrain and earthworks
 
 Done when:
 - Mutable heightfield with per-cell strata. Cut and fill with per-layer cost and time.
@@ -51,21 +68,23 @@ Done when:
   consequence before committing.
 - Ruling grade sets tonnage ratings; helpers or distributed power are the alternatives.
 
-## M4 Bulk: terminals with no cheating
+## M5 Bulk: terminals with no cheating
 
 Done when:
 - Flood loader on a loop track, rotary dumper with indexer, bottom-dump pit, grain shuttle
-  contract with a time window.
+  contract with a time window. Loader, spout and pit exist on through sidings; loops,
+  rotary dumpers and contracts do not.
 - Car types with rotary couplers, capacities and commodity densities that matter.
 - Doubling into short yards, siding length checks, crew hours of service.
 
-## M5 Everything is a thing
+## M6 Everything is a thing
 
 Done when:
 - Track is built by work trains carrying rail, ties and ballast from wherever they come
   from, at a lay rate, occupying track that revenue trains want.
 - Crews, machines and fuel are finite, hired, moved and consumed.
 - Track degrades with tonnage and is repaired through the same logistics.
+- The wreck crew is a train with a crane that has to get there.
 
 ## Later
 

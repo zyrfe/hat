@@ -37,6 +37,24 @@ firm up with citations as they are used in code.
 Curve resistance: about `m * 7 / R` N, from 0.8 lb/ton per degree of curve.
 Grade resistance: `m * g * grade`.
 
+## Economy, rough
+
+Rules of thumb for the price model in [economy.md](economy.md). Rounded, and meant to be tuned
+against play rather than defended.
+
+| Item | SI | Note |
+|---|---|---|
+| Bulk trucking | 0.10 to 0.20 $/t·km | short-haul dump trucks toward the high end; used 0.15 |
+| Truck loading or unloading | 2 to 5 $/t | per end; used 3 |
+| Road over straight-line distance | 1.3 to 1.5 | used 1.4 |
+| Diesel | ~1.2 $/L | |
+| Diesel-electric thermal efficiency at rail | ~0.30 | fuel energy 36 MJ/L |
+| Locomotive idle burn | ~15 L/h | used 0.004 L/s |
+| Flood loader throughput | 2,000 to 4,000 t/h | a 100 t car every couple of minutes; used 2,500 kg/s peak into one car |
+| Country elevator spout | ~300 kg/s | a car in five or six minutes |
+| Rotary dumper | ~30 cars/h | not built yet |
+| Rerailing a low-speed derailment | 1 to 3 h for one or two cars | used 15 min call-out plus 25 min per car |
+
 ## Cars and locomotives
 
 | Item | SI | Note |

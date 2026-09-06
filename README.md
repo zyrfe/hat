@@ -3,9 +3,10 @@
 An overhead rail-network game about stupidly long trains, honest yard work,
 real logistics and engineering trade-offs. Rust on Bevy.
 
-Design docs live in `docs/`. Code is a Cargo workspace under `crates/`. Three scenarios are
-playable: Yard Shift, Doubling, and the Terminal with its main-line loop, hump and road
-traffic, which is the default.
+Design docs live in `docs/`. Code is a Cargo workspace under `crates/`. Four scenarios are
+playable: Yard Shift, Doubling, the Terminal with its main-line loop, hump and road
+traffic (the default), and the Branch, an open-country loop with industries, scheduled
+trains and money.
 
 
 ## Docs
@@ -15,7 +16,8 @@ traffic, which is the default.
 | [docs/vision.md](docs/vision.md) | Pitch, pillars, anti-goals, genre notes |
 | [docs/goals.md](docs/goals.md) | Milestones and what "done" means for each |
 | [docs/prototype.md](docs/prototype.md) | Yard Shift: the shortest path to a playable build, build order, cut list |
-| [docs/crew.md](docs/crew.md) | Orders, plan and execution: the crew works the yard from a switch list, with manual override |
+| [docs/crew.md](docs/crew.md) | Orders, plan and execution: the crew works the yard from a switch list or a train from a schedule, with manual override |
+| [docs/economy.md](docs/economy.md) | Industries, stockpiles, trucks as the competitor, what shippers pay, running costs, wrecks |
 | [docs/features.md](docs/features.md) | Feature tracker by area, with milestone and status |
 | [docs/open-questions.md](docs/open-questions.md) | Unresolved design and tech questions |
 | [docs/architecture.md](docs/architecture.md) | Engine, crate layout, sim/render wall, data layout, LOD |
@@ -40,10 +42,11 @@ cargo run --release -p hat_app          # the game, fullscreen (F11 toggles)
 cargo run -p hat_app --features dev     # fast-iteration build with dynamic linking
 ```
 
-Press F1 in the game for controls. `HAT_SCREENSHOT=out.png cargo run --release -p hat_app`
+Press F1 in the game for controls. Drag the ground or click the minimap to move around;
+the drive keys never move the camera. `HAT_SCREENSHOT=out.png cargo run --release -p hat_app`
 saves one frame and exits, for quick visual checks from a script; it also writes `out.cab.png`
 from the cab camera, which renders offscreen and stays valid while the display sleeps.
-`HAT_SCENARIO=0|1|2` picks the starting scenario.
+`HAT_SCENARIO=0|1|2|3` picks the starting scenario; 3 is the Branch.
 
 ## Conventions
 

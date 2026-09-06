@@ -12,7 +12,26 @@ impl Plugin for DebugPlugin {
             let delay: f32 = std::env::var("HAT_SCREENSHOT_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(4.0);
             app.insert_resource(ShotPlan { path, delay, taken: false }).add_systems(Update, take_shot);
         }
+        if std::env::var("HAT_FPS_LOG").is_ok() {
+            app.insert_resource(FpsLog { next: 1.0 }).add_systems(Update, log_fps);
+        }
     }
+}
+
+#[derive(Resource)]
+struct FpsLog {
+    next: f32,
+}
+
+/// `HAT_FPS_LOG=1`: one line a second on stderr with frame rate, sim time and clock.
+fn log_fps(time: Res<Time>, mut log: ResMut<FpsLog>, diag: Res<bevy::diagnostic::DiagnosticsStore>, sim: Res<crate::sim::Sim>) {
+    if time.elapsed_secs() < log.next {
+        return;
+    }
+    log.next += 1.0;
+    let fps = diag.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let ms = diag.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    eprintln!("[fps] wall {:>5.1}s  {:>5.1} fps  {:>6.2} ms  sim t {:>7.1}s  x{}  trains {}", time.elapsed_secs(), fps, ms, sim.world.t, sim.time_scale, sim.world.trains.len());
 }
 
 #[derive(Resource)]

@@ -99,7 +99,11 @@ fn control(
     if rig.seen_generation != Some(sim.generation) {
         rig.seen_generation = Some(sim.generation);
         let lead = sim.world.graph.node(sim.yard.lead_switch).pos;
-        if sim.yard.hump.is_some() {
+        let span = sim.yard.max - sim.yard.min;
+        if span.x > 6000.0 {
+            rig.focus = sim_to_world(0.5 * (sim.yard.min + sim.yard.max));
+            rig.distance = 3200.0;
+        } else if sim.yard.hump.is_some() {
             rig.focus = sim_to_world(lead + glam::DVec2::new(700.0, 30.0));
             rig.distance = 1100.0;
         } else {
@@ -136,7 +140,7 @@ fn control(
                 MouseScrollUnit::Line => 0.88f32.powf(scroll.delta.y),
                 MouseScrollUnit::Pixel => 0.997f32.powf(scroll.delta.y),
             };
-            rig.distance = (rig.distance * factor).clamp(12.0, 7000.0);
+            rig.distance = (rig.distance * factor).clamp(12.0, 12_000.0);
         }
         if buttons.pressed(MouseButton::Right) {
             rig.yaw -= motion.delta.x * 0.005;

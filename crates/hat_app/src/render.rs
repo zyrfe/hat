@@ -108,7 +108,46 @@ fn setup(mut commands: Commands, sim: Res<Sim>, mut meshes: ResMut<Assets<Mesh>>
     let rail = materials.add(StandardMaterial { base_color: Color::srgb(0.60, 0.60, 0.62), perceptual_roughness: 0.45, metallic: 0.6, cull_mode: None, ..default() });
     let palette = Palette { ballast, tie, rail, ..palette };
     spawn_track(&mut commands, &sim, &mut meshes, &palette);
+    spawn_industries(&mut commands, &sim, &palette, &mut materials);
     commands.insert_resource(palette);
+}
+
+/// Industry buildings: boxes that read as what they are from above.
+fn spawn_industries(commands: &mut Commands, sim: &Sim, palette: &Palette, materials: &mut Assets<StandardMaterial>) {
+    let Some(e) = sim.economy.as_ref() else { return };
+    let gen = sim.generation;
+    let dark = materials.add(StandardMaterial { base_color: Color::srgb(0.16, 0.15, 0.14), perceptual_roughness: 1.0, ..default() });
+    let brick = materials.add(StandardMaterial { base_color: Color::srgb(0.55, 0.30, 0.22), perceptual_roughness: 0.9, ..default() });
+    let silo = materials.add(StandardMaterial { base_color: Color::srgb(0.82, 0.80, 0.72), perceptual_roughness: 0.7, ..default() });
+    let steel = materials.add(StandardMaterial { base_color: Color::srgb(0.45, 0.48, 0.52), perceptual_roughness: 0.6, metallic: 0.4, ..default() });
+    for ind in &e.industries {
+        let base = sim_to_world(ind.pos);
+        let mut spawn = |mesh: Handle<Mesh>, mat: Handle<StandardMaterial>, offset: Vec3, scale: Vec3| {
+            commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform { translation: base + offset + Vec3::Y * (scale.y * 0.5), scale, ..default() }, TrackVisual { generation: gen }));
+        };
+        match ind.kind {
+            hat_world::IndustryKind::CoalMine => {
+                spawn(palette.cube.clone(), steel.clone(), Vec3::new(0.0, 0.0, 0.0), Vec3::new(14.0, 18.0, 14.0));
+                spawn(palette.cube.clone(), dark.clone(), Vec3::new(-30.0, 0.0, -10.0), Vec3::new(40.0, 7.0, 26.0));
+                spawn(palette.cube.clone(), palette.coal.clone(), Vec3::new(-30.0, 7.0, -10.0), Vec3::new(30.0, 6.0, 18.0));
+            }
+            hat_world::IndustryKind::PowerPlant => {
+                spawn(palette.cube.clone(), brick.clone(), Vec3::new(0.0, 0.0, -20.0), Vec3::new(60.0, 22.0, 40.0));
+                spawn(palette.cylinder.clone(), silo.clone(), Vec3::new(40.0, 0.0, -30.0), Vec3::new(8.0, 70.0, 8.0));
+                spawn(palette.cube.clone(), palette.coal.clone(), Vec3::new(-30.0, 0.0, 10.0), Vec3::new(50.0, 5.0, 24.0));
+            }
+            hat_world::IndustryKind::Elevator => {
+                spawn(palette.cube.clone(), silo.clone(), Vec3::new(0.0, 0.0, 0.0), Vec3::new(12.0, 26.0, 10.0));
+                spawn(palette.cube.clone(), brick.clone(), Vec3::new(16.0, 0.0, 0.0), Vec3::new(18.0, 8.0, 12.0));
+            }
+            hat_world::IndustryKind::GrainTerminal => {
+                for k in 0..6 {
+                    spawn(palette.cylinder.clone(), silo.clone(), Vec3::new(-25.0 + 10.0 * k as f32, 0.0, 0.0), Vec3::new(9.0, 30.0, 9.0));
+                }
+                spawn(palette.cube.clone(), steel.clone(), Vec3::new(0.0, 30.0, 0.0), Vec3::new(64.0, 5.0, 10.0));
+            }
+        }
+    }
 }
 
 /// Track, bumpers and switch discs for the current world.
@@ -161,7 +200,7 @@ fn spawn_track(commands: &mut Commands, sim: &Sim, meshes: &mut Assets<Mesh>, pa
 }
 
 /// When the scenario changes, the track does too.
-fn rebuild_track(mut commands: Commands, sim: Res<Sim>, pal: Option<Res<Palette>>, mut meshes: ResMut<Assets<Mesh>>, q: Query<(Entity, &TrackVisual)>) {
+fn rebuild_track(mut commands: Commands, sim: Res<Sim>, pal: Option<Res<Palette>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, q: Query<(Entity, &TrackVisual)>) {
     let Some(pal) = pal else { return };
     let stale: Vec<Entity> = q.iter().filter(|(_, t)| t.generation != sim.generation).map(|(e, _)| e).collect();
     if stale.is_empty() {
@@ -171,6 +210,7 @@ fn rebuild_track(mut commands: Commands, sim: Res<Sim>, pal: Option<Res<Palette>
         commands.entity(e).despawn();
     }
     spawn_track(&mut commands, &sim, &mut meshes, &pal);
+    spawn_industries(&mut commands, &sim, &pal, &mut materials);
 }
 
 fn mesh_from(verts: Vec<[f32; 3]>, idx: Vec<u32>) -> Mesh {

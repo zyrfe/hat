@@ -13,3 +13,6 @@ consequences, status. Numbered, never renumbered. Superseded ADRs stay and point
 | [0006](0006-camera.md) | 3D overhead camera with tilt | proposed |
 | [0007](0007-terrain-strata.md) | Heightfield terrain with strata columns | proposed |
 | [0008](0008-art-direction.md) | Flat-shaded low-poly, one palette, schematic far zoom | proposed |
+| [0009](0009-pay-by-alternative.md) | Shippers pay what the alternative would cost them | accepted |
+| [0010](0010-game-clock.md) | One sim clock, compressed up to 60x, physics unchanged | accepted |
+| [0011](0011-interchange.md) | The interchange is where things come from | proposed |

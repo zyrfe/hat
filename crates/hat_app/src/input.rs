@@ -37,6 +37,8 @@ pub struct UiState {
     pub show_help: bool,
     pub fps: f32,
     pub units: UnitSystem,
+    /// Track picked in each train's order editor, by locomotive car.
+    pub order_track: std::collections::HashMap<CarId, u32>,
 }
 
 fn keyboard(
@@ -118,6 +120,15 @@ fn keyboard(
     if keys.just_pressed(KeyCode::Digit3) {
         sim.time_scale = 10;
     }
+    if keys.just_pressed(KeyCode::Digit4) {
+        sim.time_scale = 30;
+    }
+    if keys.just_pressed(KeyCode::Digit5) {
+        sim.time_scale = 60;
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        sim.action_rerail(s);
+    }
 
     if keys.just_pressed(KeyCode::Escape) {
         sel.sel = Sel::None;
@@ -197,7 +208,13 @@ fn mouse_pick(
     }
     match best.map(|b| b.1) {
         Some(Pick::Switch(n)) => sim.action_throw_switch(n),
-        Some(Pick::Car(id)) => sel.sel = Sel::Car(id),
+        Some(Pick::Car(id)) => {
+            sel.sel = Sel::Car(id);
+            let is_loco = sim.world.train_of_car(id).map(|(ti, ci)| sim.world.car_types[sim.world.trains[ti].cars[ci].type_id as usize].is_loco()).unwrap_or(false);
+            if is_loco {
+                sim.take_loco(id);
+            }
+        }
         Some(Pick::Coupler(a, b)) => sel.sel = Sel::Coupler(a, b),
         None => sel.sel = Sel::None,
     }

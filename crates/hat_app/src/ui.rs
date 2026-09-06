@@ -88,6 +88,16 @@ fn hud(
                 }
             }
         }
+        if let Some(e) = sim.economy.as_ref() {
+            for ind in &e.industries {
+                if let Some(sp) = project(ind.pos + glam::DVec2::new(0.0, 40.0)) {
+                    let label = format!("{}  {:.0} t", ind.name, ind.stock / 1000.0);
+                    let r = painter.text(sp, egui::Align2::CENTER_CENTER, &label, egui::FontId::proportional(13.0), Color32::WHITE);
+                    painter.rect_filled(r.expand(3.0), 3.0, Color32::from_black_alpha(140));
+                    painter.text(sp, egui::Align2::CENTER_CENTER, &label, egui::FontId::proportional(13.0), Color32::WHITE);
+                }
+            }
+        }
         for node in &sim.world.graph.nodes {
             if matches!(node.kind, NodeKind::Turnout { .. }) {
                 if let Some(sp) = project(node.pos + glam::DVec2::new(0.0, -5.0)) {
@@ -118,9 +128,14 @@ fn hud(
     egui::Panel::top("top").show(&mut root, |ui| {
         ui.horizontal(|ui| {
             ui.heading(sim.scenario.name);
-            if sim.auto {
-                let paused = sim.crew.as_ref().map(|c| c.paused).unwrap_or(false);
-                ui.colored_label(if paused { Color32::from_rgb(250, 190, 60) } else { Color32::from_rgb(110, 200, 120) }, if paused { "AUTO paused: you have the engine" } else { "AUTO: crew driving" });
+            if let Some(c) = sim.crew() {
+                let paused = c.paused;
+                ui.colored_label(if paused { Color32::from_rgb(250, 190, 60) } else { Color32::from_rgb(110, 200, 120) }, if paused { format!("{}: you have the engine", c.name) } else { format!("{}: crew driving", c.name) });
+            }
+            if let Some(e) = sim.economy.as_ref() {
+                ui.separator();
+                let bal = e.ledger.balance;
+                ui.colored_label(if bal < 0 { Color32::LIGHT_RED } else { Color32::from_rgb(200, 230, 140) }, egui::RichText::new(money(bal)).strong());
             }
             ui.separator();
             ui.label(format!("t {}", uf::duration(sim.world.t)));
@@ -147,7 +162,12 @@ fn hud(
                 let tr = &sim.world.trains[ti];
                 if let Some(l) = sim.world.car_location(tr, ci) {
                     let e = sim.world.graph.edge(l.edge);
-                    ui.label(format!("On {} (limit {})", sim.yard.track_name(e.track.unwrap_or(0)), uf::speed(e.speed_limit, u)));
+                    let train_limit = sim.world.train_limit(tr).unwrap_or(e.speed_limit);
+                    if train_limit < e.speed_limit - 0.01 {
+                        ui.label(format!("On {} (limit {}, train {})", sim.yard.track_name(e.track.unwrap_or(0)), uf::speed(e.speed_limit, u), uf::speed(train_limit, u)));
+                    } else {
+                        ui.label(format!("On {} (limit {})", sim.yard.track_name(e.track.unwrap_or(0)), uf::speed(e.speed_limit, u)));
+                    }
                 }
             }
             {
@@ -316,6 +336,21 @@ fn hud(
             crew_panel(ui, sim);
             ui.separator();
 
+            if sim.crews.len() > 1 {
+                ui.heading("Trains");
+                trains_panel(ui, sim, &mut ui_state);
+                ui.separator();
+            }
+
+            if sim.economy.is_some() {
+                ui.heading("Industries");
+                industries_panel(ui, sim);
+                ui.separator();
+                ui.heading("Ledger");
+                ledger_panel(ui, sim);
+                ui.separator();
+            }
+
             if sim.dispatcher.is_some() {
                 ui.heading("Traffic");
                 traffic_panel(ui, sim);
@@ -373,7 +408,9 @@ fn hud(
                  arrows     pan    wheel  zoom    right-drag  orbit    middle-drag  pan\n\
                  F          follow locomotive     Home  reset camera\n\
                  \n\
-                 Time       P pause    1 / 2 / 3  speed 1x / 4x / 10x\n\
+                 R          call the wreck crew for the selected derailed train\n\
+                 \n\
+                 Time       P pause    1 / 2 / 3 / 4 / 5  speed 1x / 4x / 10x / 30x / 60x\n\
                  U units    F11 fullscreen    Esc deselect    Cmd/Ctrl+Q quit\n\
                  \n\
                  Real rules in play: couple under 1.8 m/s or take damage. Pins pull only\n\
@@ -431,6 +468,27 @@ fn selection_panel(ui: &mut egui::Ui, sim: &mut Sim, s: Sel, u: UnitSystem) {
             ui.label(line1);
             ui.label(line2);
             ui.label(line3);
+            {
+                let (derailed, train_id) = {
+                    let tr = sim.world.train(tid).unwrap();
+                    (tr.derailed, tr.id)
+                };
+                if derailed {
+                    let t = sim.world.t;
+                    match sim.wrecker.progress(train_id, t) {
+                        Some(p) => {
+                            ui.colored_label(Color32::from_rgb(250, 190, 60), format!("Wreck crew working: {:.0}%", p * 100.0));
+                        }
+                        None => {
+                            if let Some((secs, cents, n)) = Wrecker::estimate(&sim.world, train_id) {
+                                if ui.button(format!("Call wreck crew (R): {n} on the ground, about {} and {}", uf::duration(secs), money(cents))).clicked() {
+                                    sim.action_rerail(s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let (cur_dest, kind) = {
                 let tr = sim.world.train(tid).unwrap();
                 let c = &tr.cars[ci];
@@ -500,18 +558,15 @@ fn selection_panel(ui: &mut egui::Ui, sim: &mut Sim, s: Sel, u: UnitSystem) {
 
 fn crew_panel(ui: &mut egui::Ui, sim: &mut Sim) {
     let mut auto = sim.auto;
-    if ui.checkbox(&mut auto, "Auto: the crew works the switch list").changed() {
+    if ui.checkbox(&mut auto, "Auto: the crew drives this engine").changed() {
         if auto {
             sim.resume_crew();
         } else {
-            sim.auto = false;
-            if let Some(c) = sim.crew.as_mut() {
-                c.paused = true;
-            }
+            sim.pause_crew("Auto switched off");
         }
     }
-    let Some(crew) = sim.crew.as_ref() else {
-        ui.label("No crew.");
+    let Some(crew) = sim.crew() else {
+        ui.label("No crew on this engine.");
         return;
     };
     let status = match &crew.status {
@@ -549,5 +604,184 @@ fn traffic_panel(ui: &mut egui::Ui, sim: &Sim) {
     };
     for (lt, line) in d.log.iter().rev().take(5) {
         ui.small(format!("{} {line}", uf::duration(*lt)));
+    }
+}
+
+fn trains_panel(ui: &mut egui::Ui, sim: &mut Sim, ui_state: &mut UiState) {
+    let active = sim.active_loco;
+    let track_ids: Vec<(u32, String)> = sim.yard.tracks.iter().map(|t| (t.id, t.name.clone())).collect();
+    let mut take: Option<CarId> = None;
+    let mut edits: Vec<(usize, ScheduleEdit)> = Vec::new();
+    let t = sim.world.t;
+    for (ci, crew) in sim.crews.iter().enumerate() {
+        let is_active = active == Some(crew.loco_car);
+        let status = match &crew.status {
+            Status::Running => if crew.paused { "you have the engine".to_string() } else { crew.describe() },
+            Status::Done => "done".to_string(),
+            Status::Failed(why) => format!("stuck: {why}"),
+        };
+        ui.horizontal(|ui| {
+            if ui.selectable_label(is_active, egui::RichText::new(&crew.name).strong()).clicked() {
+                take = Some(crew.loco_car);
+            }
+            let color = match &crew.status {
+                Status::Failed(_) => Color32::LIGHT_RED,
+                _ if crew.paused => Color32::from_rgb(250, 190, 60),
+                _ => Color32::LIGHT_GRAY,
+            };
+            ui.colored_label(color, status);
+        });
+        if let Some(sched) = crew.schedule() {
+            let laps = match &crew.program {
+                Program::Run(j) => j.laps,
+                _ => 0,
+            };
+            ui.horizontal_wrapped(|ui| {
+                for (oi, o) in sched.orders.iter().enumerate() {
+                    let name = sim.yard.track_name(o.track());
+                    let text = format!("{}. {} {}", oi + 1, o.verb(), name);
+                    let cur = oi == sched.current && crew.status == Status::Running;
+                    if ui.selectable_label(cur, egui::RichText::new(text).small()).clicked() {
+                        edits.push((ci, ScheduleEdit::Remove(oi)));
+                    }
+                }
+                if sched.orders.is_empty() {
+                    ui.small("no orders");
+                }
+                ui.small(format!("({laps} done)"));
+            });
+            let sel_track = *ui_state.order_track.entry(crew.loco_car).or_insert(track_ids.first().map(|t| t.0).unwrap_or(1));
+            ui.horizontal_wrapped(|ui| {
+                let mut chosen = sel_track;
+                egui::ComboBox::from_id_salt(("order_track", crew.loco_car)).selected_text(sim.yard.track_name(chosen)).width(130.0).show_ui(ui, |ui| {
+                    for (id, name) in &track_ids {
+                        ui.selectable_value(&mut chosen, *id, name);
+                    }
+                });
+                if chosen != sel_track {
+                    ui_state.order_track.insert(crew.loco_car, chosen);
+                }
+                if ui.small_button("+ Go to").clicked() {
+                    edits.push((ci, ScheduleEdit::Add(Order::GoTo { track: chosen })));
+                }
+                if ui.small_button("+ Load").clicked() {
+                    edits.push((ci, ScheduleEdit::Add(Order::Load { track: chosen, full: false })));
+                }
+                if ui.small_button("+ Load full").clicked() {
+                    edits.push((ci, ScheduleEdit::Add(Order::Load { track: chosen, full: true })));
+                }
+                if ui.small_button("+ Unload").clicked() {
+                    edits.push((ci, ScheduleEdit::Add(Order::Unload { track: chosen })));
+                }
+                let mut repeat = sched.repeat;
+                if ui.checkbox(&mut repeat, "repeat").changed() {
+                    edits.push((ci, ScheduleEdit::Repeat(repeat)));
+                }
+                if matches!(crew.status, Status::Failed(_) | Status::Done) && ui.small_button("Restart").clicked() {
+                    edits.push((ci, ScheduleEdit::Restart));
+                }
+            });
+            ui.small("Click an order to remove it.");
+        }
+        if let Some((lt, line)) = crew.radio.back() {
+            if t - lt < 120.0 {
+                ui.small(format!("  \u{201c}{line}\u{201d}"));
+            }
+        }
+    }
+    for (ci, edit) in edits {
+        let t = sim.world.t;
+        let crew = &mut sim.crews[ci];
+        match edit {
+            ScheduleEdit::Add(o) => {
+                if let Some(sch) = crew.schedule_mut() {
+                    sch.orders.push(o);
+                }
+                if matches!(crew.status, Status::Done) {
+                    crew.status = Status::Running;
+                    crew.replan();
+                }
+            }
+            ScheduleEdit::Remove(i) => {
+                if let Some(sch) = crew.schedule_mut() {
+                    if i < sch.orders.len() {
+                        sch.orders.remove(i);
+                    }
+                    if sch.current > i || sch.current >= sch.orders.len() {
+                        sch.current = sch.current.saturating_sub(1);
+                    }
+                }
+                crew.replan();
+            }
+            ScheduleEdit::Repeat(r) => {
+                if let Some(sch) = crew.schedule_mut() {
+                    sch.repeat = r;
+                }
+            }
+            ScheduleEdit::Restart => {
+                crew.status = Status::Running;
+                crew.paused = false;
+                crew.replan();
+                crew.say(t, "Back to work.");
+            }
+        }
+    }
+    if let Some(car) = take {
+        sim.take_loco(car);
+    }
+}
+
+enum ScheduleEdit {
+    Add(Order),
+    Remove(usize),
+    Repeat(bool),
+    Restart,
+}
+
+fn industries_panel(ui: &mut egui::Ui, sim: &Sim) {
+    let Some(e) = sim.economy.as_ref() else { return };
+    egui::Grid::new("industries").striped(true).show(ui, |ui| {
+        ui.strong("Industry");
+        ui.strong("Stock");
+        ui.strong("t/day");
+        ui.strong("Pays");
+        ui.strong("Trust");
+        ui.end_row();
+        for i in &e.industries {
+            ui.label(&i.name);
+            let bar = egui::ProgressBar::new(i.fill() as f32).text(format!("{:.0}/{:.0} t", i.stock / 1000.0, i.capacity / 1000.0)).desired_width(120.0);
+            ui.add(bar);
+            ui.label(format!("{}{:.0}", if i.is_producer() { "+" } else { "-" }, i.tonnes_per_day()));
+            if i.is_producer() {
+                ui.label("-");
+            } else {
+                ui.label(format!("${:.2}/t", e.offer(&sim.world.graph, i, None)));
+            }
+            ui.label(format!("{:.0}%", i.service * 100.0));
+            ui.end_row();
+        }
+    });
+    let trucked: f64 = e.industries.iter().map(|i| i.trucked).sum();
+    let railed: f64 = e.industries.iter().map(|i| i.rail).sum();
+    ui.small(format!("Moved by rail {:.0} t, by truck {:.0} t. Trucks take what you do not.", railed / 1000.0, trucked / 1000.0));
+}
+
+fn ledger_panel(ui: &mut egui::Ui, sim: &Sim) {
+    let Some(e) = sim.economy.as_ref() else { return };
+    ui.horizontal_wrapped(|ui| {
+        for a in ACCOUNTS {
+            let v = e.ledger.total(a);
+            if v != 0 {
+                ui.label(format!("{} {}", a.name(), money(v)));
+            }
+        }
+    });
+    for en in e.ledger.entries.iter().rev().take(8) {
+        let color = if en.amount >= 0 { Color32::from_rgb(200, 230, 140) } else { Color32::from_rgb(230, 170, 140) };
+        ui.horizontal(|ui| {
+            ui.small(uf::duration(en.t));
+            ui.colored_label(color, egui::RichText::new(money(en.amount)).small().monospace());
+            ui.small(&en.note);
+        });
     }
 }

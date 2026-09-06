@@ -34,6 +34,7 @@
 **Mass-haul diagram.** Cumulative cut minus fill along an alignment, used to plan earth movement.
 **MGT.** Million gross tons. Track wear counter.
 **Muskeg.** Peat bog. Terrible ground for embankments.
+**Rerail.** Put a derailed car back on the track with jacks, rerailing frogs or a crane.
 **Retarder.** Rail-mounted clamp in a hump yard that slows rolling cars.
 **Rock-and-roll.** Resonant roll on staggered jointed rail at a specific speed.
 **Rotary coupler.** Coupler that lets a car rotate for dumping while still coupled.
@@ -42,6 +43,8 @@
 **Set out.** Leave a car on a siding, usually because it is bad order.
 **Shove to a joint.** Push a cut until it couples.
 **Slack.** Free play in couplers. Sums to meters over a long train.
+**Spot.** Put a car exactly where a facility wants it, one car at a time.
+**Spout.** Elevator loading pipe that fills a standing car through its top hatches.
 **Split switch.** Derailment from entering a turnout set against the move at its points.
 **Spoil.** Excavated material with no use on site.
 **Stringlining.** Cars pulled toward the inside of a curve by draft force until they derail. Empties are prone.
@@ -51,5 +54,6 @@
 **Truck.** Bogie: the wheel assembly under each end of a car.
 **Turnout.** A switch plus its frog and closure rails. The whole diverging assembly.
 **Unit train.** One commodity, one origin, one destination, cycling.
+**Wreck crew.** The gang and equipment that clears and rerails a derailment.
 **Waybill.** The routing and billing record for one car's load.
 **Wayside detector.** Trackside sensor for hot bearings or dragging equipment.

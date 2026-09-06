@@ -10,6 +10,7 @@ use hat_sim::params::*;
 use hat_sim::*;
 use hat_units::G;
 
+use crate::route::route_for_train;
 use crate::terminal::TRACK_HUMP as TRACK_HUMP_ID;
 use crate::yard::*;
 
@@ -31,6 +32,10 @@ pub enum Target {
     CouplerOnEdge { a: CarId, b: CarId, edge: EdgeId, from_node: NodeId, depth: f64 },
     /// Travel a fixed distance.
     Distance { total: f64, done: f64 },
+    /// The leading face ends up `depth` meters along `edge` from `from_node`.
+    FaceOnEdge { edge: EdgeId, from_node: NodeId, depth: f64 },
+    /// Car `car`'s centre ends up `depth` meters along `edge` from `from_node`.
+    CarOnEdge { car: CarId, edge: EdgeId, from_node: NodeId, depth: f64 },
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +51,10 @@ pub struct Drive {
     pub stop_on_couple: bool,
     /// Ignore whatever stands ahead: we are shoving it (humping).
     pub push_through: bool,
+    /// Waiting on other traffic is part of the job: no half-hour timeout.
+    pub patient: bool,
+    /// Facing switches on the way that are not yet lined: stop short of them until they are.
+    pub pending_switches: Vec<(NodeId, Route)>,
     cars_at_start: Option<usize>,
     started: Option<f64>,
     last_x: Option<f64>,
@@ -60,7 +69,12 @@ pub struct Drive {
 
 impl Drive {
     pub fn new(forward: bool, target: Target, v_end: f64, vmax: f64) -> Self {
-        Drive { forward, target, v_end, vmax, join: false, stop_on_couple: false, push_through: false, cars_at_start: None, started: None, last_x: None, notch_bias: 0.0, last_v: None, last_progress: None, trace: VecDeque::new() }
+        Drive { forward, target, v_end, vmax, join: false, stop_on_couple: false, push_through: false, patient: false, pending_switches: Vec::new(), cars_at_start: None, started: None, last_x: None, notch_bias: 0.0, last_v: None, last_progress: None, trace: VecDeque::new() }
+    }
+    /// A road move: other traffic may hold us, and that is fine.
+    pub fn patient(mut self) -> Self {
+        self.patient = true;
+        self
     }
     /// Shove whatever is touching us ahead instead of stopping short of it.
     pub fn pushing(mut self) -> Self {
@@ -93,6 +107,13 @@ pub enum Maneuver {
     BleedAll,
     /// Wait for the pipe to charge through to the rear.
     WaitCharged { since: Option<f64> },
+    /// Line the switches on the way as they come within reach, driving all the while and
+    /// holding short of any that are not lined yet.
+    RouteAndDrive { settings: Vec<(NodeId, Route)>, drive: Drive },
+    /// Stand while a facility works `car` (or every car on `edge` when None). Ends when the
+    /// car is done, the facility runs dry, or nothing has changed for a while. `full` keeps
+    /// waiting for stock to arrive.
+    WaitWorked { car: Option<CarId>, edge: EdgeId, full: bool, since: Option<f64>, last_payload: Option<f64>, last_change: Option<f64> },
 }
 
 /// What a crew is trying to accomplish over many maneuvers.
@@ -107,6 +128,67 @@ pub enum Program {
     RoadIn(RoadJob),
     /// Road crew: from the portal to the departure track, couple, charge, leave.
     RoadOut(RoadJob),
+    /// A road train working an order list: go here, load there, unload elsewhere, repeat.
+    Run(RunJob),
+}
+
+/// One stop on a train's schedule.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Order {
+    GoTo { track: u32 },
+    /// Load at the track's facility. `full`: wait for stock rather than leave with what there is.
+    Load { track: u32, full: bool },
+    Unload { track: u32 },
+}
+
+impl Order {
+    pub fn track(&self) -> u32 {
+        match self {
+            Order::GoTo { track } | Order::Load { track, .. } | Order::Unload { track } => *track,
+        }
+    }
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Order::GoTo { .. } => "Go to",
+            Order::Load { full: true, .. } => "Load full at",
+            Order::Load { .. } => "Load at",
+            Order::Unload { .. } => "Unload at",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Schedule {
+    pub orders: Vec<Order>,
+    pub current: usize,
+    pub repeat: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RunJob {
+    pub yard: Yard,
+    pub schedule: Schedule,
+    pub phase: RunPhase,
+    /// Orders completed.
+    pub laps: u32,
+}
+
+/// Where a run is, with the facts it decided when it planned the leg: `forward` is the
+/// train-frame direction of travel, `along` whether that runs with `s` on the target edge,
+/// `queue` the cars the facility will work in travel order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunPhase {
+    /// Pick the current order and route to it.
+    Next,
+    /// On the way.
+    Travelling { queue: Vec<CarId>, forward: bool, along: bool },
+    /// Creeping the whole train past a chute or pit.
+    Creeping { queue: Vec<CarId>, forward: bool, along: bool },
+    /// Moving the next car in the queue to the spot.
+    Spotting { queue: Vec<CarId>, forward: bool, along: bool },
+    /// Standing while the facility works the first car in the queue.
+    Waiting { queue: Vec<CarId>, forward: bool, along: bool },
+    Done,
 }
 
 #[derive(Clone, Debug)]
@@ -206,7 +288,7 @@ pub enum SortPhase {
 
 #[derive(Clone, Debug)]
 pub struct Crew {
-    pub name: &'static str,
+    pub name: String,
     pub loco_car: CarId,
     pub program: Program,
     pub current: Option<Maneuver>,
@@ -228,8 +310,8 @@ pub struct Crew {
 }
 
 impl Crew {
-    pub fn new(name: &'static str, loco_car: CarId, program: Program, t: f64) -> Self {
-        Crew { name, loco_car, program, current: None, paused: false, status: Status::Running, radio: VecDeque::new(), deliveries: 0, started_at: t, finished_at: None, pending_after_route: None, stalled_since: None, repositioned: false, last_drive: None, prev_drive: None }
+    pub fn new(name: impl Into<String>, loco_car: CarId, program: Program, t: f64) -> Self {
+        Crew { name: name.into(), loco_car, program, current: None, paused: false, status: Status::Running, radio: VecDeque::new(), deliveries: 0, started_at: t, finished_at: None, pending_after_route: None, stalled_since: None, repositioned: false, last_drive: None, prev_drive: None }
     }
 
     /// A Sort job for a yard with a single ladder off `lead_switch`.
@@ -242,6 +324,41 @@ impl Crew {
 
     pub fn hump_job(yard: &Yard) -> Program {
         Program::Hump(HumpJob { yard: yard.clone(), phase: HumpPhase::LiningWest, bowl_for: vec![(5, 11), (6, 12), (1, 13)], default_bowl: 14, last_cut: None, last_cut_len: 0.0 })
+    }
+
+    /// A road schedule over the tracks of `yard`.
+    pub fn run_job(yard: &Yard, orders: Vec<Order>, repeat: bool) -> Program {
+        Program::Run(RunJob { yard: yard.clone(), schedule: Schedule { orders, current: 0, repeat }, phase: RunPhase::Next, laps: 0 })
+    }
+
+    pub fn schedule(&self) -> Option<&Schedule> {
+        match &self.program {
+            Program::Run(j) => Some(&j.schedule),
+            _ => None,
+        }
+    }
+
+    /// Edit the schedule. The crew re-plans from the current order afterwards.
+    pub fn schedule_mut(&mut self) -> Option<&mut Schedule> {
+        match &mut self.program {
+            Program::Run(j) => {
+                j.phase = RunPhase::Next;
+                Some(&mut j.schedule)
+            }
+            _ => None,
+        }
+    }
+
+    /// Forget what was in progress and plan afresh from the current order. Used after a
+    /// manual override or a failure, when the train may be anywhere.
+    pub fn replan(&mut self) {
+        if let Program::Run(j) = &mut self.program {
+            j.phase = RunPhase::Next;
+            if !j.schedule.orders.is_empty() {
+                j.schedule.current %= j.schedule.orders.len();
+            }
+        }
+        self.current = None;
     }
 
     pub fn say(&mut self, t: f64, line: impl Into<String>) {
@@ -267,6 +384,13 @@ impl Crew {
                 Program::Sort(j) => format!("{:?}", j.phase),
                 Program::Hump(j) => format!("hump: {:?}", j.phase),
                 Program::RoadIn(j) | Program::RoadOut(j) => format!("road: {:?}", j.phase),
+                Program::Run(j) => match &j.phase {
+                    RunPhase::Done => "schedule complete".into(),
+                    _ => match j.schedule.orders.get(j.schedule.current) {
+                        Some(o) => format!("{} {}", o.verb(), j.yard.track_name(o.track())),
+                        None => "no orders".into(),
+                    },
+                },
             },
             Some(Maneuver::Route { .. }) => "lining switches".into(),
             Some(Maneuver::Drive(d)) => match &d.target {
@@ -274,6 +398,8 @@ impl Crew {
                 Target::ShortOfTrain { .. } => "approaching to couple".into(),
                 Target::CouplerOnEdge { .. } => "shoving in".into(),
                 Target::Distance { .. } => "moving".into(),
+                Target::FaceOnEdge { .. } => "running".into(),
+                Target::CarOnEdge { .. } => if d.vmax < 1.0 { "creeping through".into() } else { "spotting a car".into() },
             },
             Some(Maneuver::PullPin { .. }) => "pulling the pin".into(),
             Some(Maneuver::HandBrakes { on, .. }) => if *on { "tying down".into() } else { "releasing hand brakes".into() },
@@ -281,6 +407,16 @@ impl Crew {
             Some(Maneuver::LaceHoses) => "lacing hoses".into(),
             Some(Maneuver::BleedAll) => "bleeding the cut".into(),
             Some(Maneuver::WaitCharged { .. }) => "charging the air".into(),
+            Some(Maneuver::RouteAndDrive { drive, .. }) => {
+                if !drive.pending_switches.is_empty() { "waiting on a switch".into() } else { "running".into() }
+            }
+            Some(Maneuver::WaitWorked { .. }) => match &self.program {
+                Program::Run(j) => match j.schedule.orders.get(j.schedule.current) {
+                    Some(Order::Unload { .. }) => "unloading".into(),
+                    _ => "loading".into(),
+                },
+                _ => "at the facility".into(),
+            },
         }
     }
 
@@ -478,6 +614,69 @@ impl Crew {
                 let far = if li == 0 { tr.cars.len() - 1 } else { 0 };
                 if tr.cars[far].brake.p_pipe > 450_000.0 || t - started > 900.0 { Status::Done } else { Status::Running }
             }
+            Maneuver::RouteAndDrive { settings, drive: d } => {
+                // Line what is within reach. A switch we cannot see along the current
+                // settings is beyond an unlined one: line it now so the path opens up.
+                let face = if d.forward { End::Head } else { End::Tail };
+                let mut to_throw = Vec::new();
+                let mut pending = Vec::new();
+                {
+                    let tr = world.train(id).unwrap();
+                    for (node, route) in settings.iter() {
+                        if world.graph.turnout_setting(*node) == Some(*route) {
+                            continue;
+                        }
+                        let dist = world.distance_to_node(tr, face, d.forward, *node, 2500.0);
+                        if dist.map_or(true, |x| x < 2000.0) {
+                            to_throw.push(*node);
+                        }
+                        pending.push((*node, *route));
+                    }
+                }
+                for node in to_throw {
+                    let _ = world.throw_switch(node);
+                }
+                pending.retain(|(node, route)| world.graph.turnout_setting(*node) != Some(*route));
+                d.pending_switches = pending;
+                drive(d, world, id, dt)
+            }
+            Maneuver::WaitWorked { car, edge, full, since, last_payload, last_change } => {
+                hold(world, id);
+                let started = *since.get_or_insert(t);
+                let tr = world.train(id).unwrap();
+                let types = &world.car_types;
+                let fac = world.graph.edge(*edge).facility;
+                let (payload, done) = match car {
+                    Some(cid) => match tr.cars.iter().position(|c| c.id == *cid) {
+                        Some(i) => {
+                            let c = &tr.cars[i];
+                            let ct = &types[c.type_id as usize];
+                            let done = match fac.map(|f| f.kind) {
+                                Some(FacilityKind::Load(_)) => c.m_payload >= ct.m_payload_max - 1.0,
+                                Some(FacilityKind::Unload(_)) => c.m_payload <= 0.0,
+                                None => true,
+                            };
+                            (c.m_payload, done)
+                        }
+                        None => return Status::Failed("the car we were loading is gone".into()),
+                    },
+                    None => {
+                        let total: f64 = tr.cars.iter().enumerate().filter(|(i, _)| world.car_location(tr, *i).map(|l| l.edge == *edge).unwrap_or(false)).map(|(_, c)| c.m_payload).sum();
+                        (total, false)
+                    }
+                };
+                if last_payload.map_or(true, |p| (p - payload).abs() > 1.0) {
+                    *last_payload = Some(payload);
+                    *last_change = Some(t);
+                }
+                let idle = t - last_change.unwrap_or(t);
+                let dry = fac.map(|f| f.budget <= 1.0).unwrap_or(true);
+                if done || (dry && !*full) || (!*full && idle > 20.0) || (*full && idle > 2.0 * 3600.0) || t - started > 4.0 * 3600.0 {
+                    Status::Done
+                } else {
+                    Status::Running
+                }
+            }
         }
     }
 
@@ -585,6 +784,7 @@ impl Crew {
                     other => other,
                 };
             }
+            Program::Run(_) => {}
             Program::RoadOut(j) => {
                 j.phase = match j.phase.clone() {
                     RoadPhase::Lining => RoadPhase::Running,
@@ -728,6 +928,7 @@ impl Crew {
             Program::Hump(j) => self.next_hump(world, tr, li, n, j),
             Program::RoadIn(j) => self.next_road_in(world, tr, li, n, j),
             Program::RoadOut(j) => self.next_road_out(world, tr, li, n, j),
+            Program::Run(j) => self.next_run(world, tr, li, j),
         }
         .or_else(|| {
             let _ = t;
@@ -1054,6 +1255,261 @@ impl Crew {
         }
     }
 
+    fn set_run_phase(&mut self, p: RunPhase) {
+        if let Program::Run(j) = &mut self.program {
+            j.phase = p;
+        }
+    }
+
+    /// Move to the next order. Returns false when the schedule is finished.
+    fn finish_order(&mut self, t: f64) -> bool {
+        let Program::Run(j) = &mut self.program else { return false };
+        j.laps += 1;
+        j.schedule.current += 1;
+        if j.schedule.current >= j.schedule.orders.len() {
+            if j.schedule.repeat && !j.schedule.orders.is_empty() {
+                j.schedule.current = 0;
+            } else {
+                j.phase = RunPhase::Done;
+                self.finished_at = Some(t);
+                self.status = Status::Done;
+                self.say(t, "Schedule complete. Standing by.");
+                return false;
+            }
+        }
+        j.phase = RunPhase::Next;
+        true
+    }
+
+    /// Cars the facility on `edge` would work, in travel order for direction `forward`.
+    fn cars_to_work(world: &World, tr: &Train, forward: bool, fac: &Facility) -> Vec<CarId> {
+        let types = &world.car_types;
+        let n = tr.cars.len();
+        let order: Vec<usize> = if forward { (0..n).collect() } else { (0..n).rev().collect() };
+        order
+            .into_iter()
+            .filter(|&i| {
+                let c = &tr.cars[i];
+                let ct = &types[c.type_id as usize];
+                if ct.is_loco() || ct.m_payload_max <= 0.0 {
+                    return false;
+                }
+                match fac.kind {
+                    FacilityKind::Load(com) => c.m_payload < ct.m_payload_max - 1.0 && (c.commodity == Commodity::Empty || c.commodity == com),
+                    FacilityKind::Unload(want) => c.m_payload > 0.0 && want.map_or(true, |w| c.commodity == w),
+                }
+            })
+            .map(|i| tr.cars[i].id)
+            .collect()
+    }
+
+    /// Speed to creep under a chute so every car fills before it is past, m/s.
+    fn creep_speed(world: &World, tr: &Train, car: CarId, fac: &Facility) -> f64 {
+        let ct = tr.cars.iter().find(|c| c.id == car).map(|c| &world.car_types[c.type_id as usize]);
+        let by_rate = ct.map(|ct| fac.rate * ct.length / ct.m_payload_max.max(1.0) * 0.65).unwrap_or(0.3);
+        by_rate.clamp(0.1, fac.max_speed() * 0.9)
+    }
+
+    fn next_run(&mut self, world: &World, tr: &Train, li: usize, j: RunJob) -> Option<Maneuver> {
+        let t = world.t;
+        let yard = &j.yard;
+        let types = &world.car_types;
+        let orders = &j.schedule.orders;
+        if orders.is_empty() {
+            if !matches!(j.phase, RunPhase::Done) {
+                self.set_run_phase(RunPhase::Done);
+                self.status = Status::Done;
+                self.finished_at = Some(t);
+            }
+            return None;
+        }
+        let order = orders[j.schedule.current.min(orders.len() - 1)].clone();
+        let track = order.track();
+        let Some(yt) = yard.track(track) else {
+            self.status = Status::Failed(format!("no track {track} on this railroad"));
+            return None;
+        };
+        // The edge this order is about.
+        let target = match &order {
+            Order::GoTo { .. } => yt.edges.iter().copied().max_by(|&a, &b| world.graph.edge(a).length.total_cmp(&world.graph.edge(b).length))?,
+            _ => match yt.edges.iter().copied().find(|&e| world.graph.edge(e).facility.is_some()) {
+                Some(e) => e,
+                None => {
+                    self.status = Status::Failed(format!("{} has nothing to load or unload with", yt.name));
+                    return None;
+                }
+            },
+        };
+        let e = world.graph.edge(target);
+        let fac = e.facility;
+        let train_len = tr.length(types);
+        let done_count = |fac: &Facility, queue: &[CarId]| -> (usize, f64) {
+            let mut n = 0;
+            let mut tonnes = 0.0;
+            for id in queue {
+                if let Some(c) = tr.cars.iter().find(|c| c.id == *id) {
+                    let ct = &types[c.type_id as usize];
+                    match fac.kind {
+                        FacilityKind::Load(_) => {
+                            if c.m_payload >= ct.m_payload_max - 1.0 {
+                                n += 1;
+                            }
+                            tonnes += c.m_payload / 1000.0;
+                        }
+                        FacilityKind::Unload(_) => {
+                            if c.m_payload <= 0.0 {
+                                n += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            (n, tonnes)
+        };
+        match j.phase.clone() {
+            RunPhase::Done => None,
+            RunPhase::Next => {
+                let fwd = route_for_train(world, tr, true, target);
+                let bwd = route_for_train(world, tr, false, target);
+                let loco_leads_forward = li == 0;
+                let (forward, plan) = match (fwd, bwd) {
+                    (Some(f), Some(b)) => {
+                        // Prefer the locomotive leading unless that is a much longer way round.
+                        if loco_leads_forward && f.length <= b.length + 6_000.0 {
+                            (true, f)
+                        } else if !loco_leads_forward && b.length <= f.length + 6_000.0 {
+                            (false, b)
+                        } else if f.length <= b.length {
+                            (true, f)
+                        } else {
+                            (false, b)
+                        }
+                    }
+                    (Some(f), None) => (true, f),
+                    (None, Some(b)) => (false, b),
+                    (None, None) => {
+                        self.status = Status::Failed(format!("no route to {}", yt.name));
+                        return None;
+                    }
+                };
+                let along = plan.target_along_s;
+                let from_node = if along { e.a } else { e.b };
+                let depth_of = |s: f64| if along { s } else { e.length - s };
+                let vmax = 20.0;
+                let (drive, queue) = match (&order, fac) {
+                    (Order::GoTo { .. }, _) | (_, None) => {
+                        let depth = (train_len + 15.0).min(e.length - 10.0).max(5.0);
+                        (Drive::new(forward, Target::FaceOnEdge { edge: target, from_node, depth }, 0.0, vmax).patient(), vec![])
+                    }
+                    (_, Some(fac)) => {
+                        let queue = Self::cars_to_work(world, tr, forward, &fac);
+                        if queue.is_empty() {
+                            self.say(t, format!("Nothing to do at {}.", yt.name));
+                            self.finish_order(t);
+                            return None;
+                        }
+                        // A full load at a flood loader wants a pile to draw from first.
+                        if let (Order::Load { full: true, .. }, FacilityMode::Spot { max_speed, .. }) = (&order, fac.mode) {
+                            if max_speed >= 0.2 {
+                                let need: f64 = queue.iter().filter_map(|id| tr.cars.iter().find(|c| c.id == *id)).map(|c| types[c.type_id as usize].m_payload_max - c.m_payload).sum();
+                                if fac.budget < 0.5 * need {
+                                    if self.radio.back().map(|(_, l)| !l.starts_with("Waiting for")).unwrap_or(true) {
+                                        self.say(t, format!("Waiting for {} to build a pile: {:.0} of {:.0} t there.", yt.name, fac.budget / 1000.0, need / 1000.0));
+                                    }
+                                    return Some(Maneuver::Wait { until: t + 300.0 });
+                                }
+                            }
+                        }
+                        match fac.mode {
+                            FacilityMode::Track { .. } => {
+                                let depth = (train_len + 10.0).min(e.length - 10.0).max(5.0);
+                                (Drive::new(forward, Target::FaceOnEdge { edge: target, from_node, depth }, 0.0, vmax).patient(), queue)
+                            }
+                            FacilityMode::Spot { s, max_speed } => {
+                                let first = queue[0];
+                                let v_end = if max_speed >= 0.2 { Self::creep_speed(world, tr, first, &fac) } else { 0.0 };
+                                (Drive::new(forward, Target::CarOnEdge { car: first, edge: target, from_node, depth: depth_of(s) }, v_end, vmax).patient(), queue)
+                            }
+                        }
+                    }
+                };
+                let what = if queue.is_empty() { String::new() } else { format!(" {} cars to work.", queue.len()) };
+                self.say(t, format!("{} {}.{what} {}", order.verb(), yt.name, if plan.settings.is_empty() { "Straight ahead.".to_string() } else { format!("{} switches to line.", plan.settings.len()) }));
+                self.set_run_phase(RunPhase::Travelling { queue, forward, along });
+                Some(Maneuver::RouteAndDrive { settings: plan.settings, drive })
+            }
+            RunPhase::Travelling { queue, forward, along } => {
+                let Some(fac) = fac.filter(|_| !matches!(order, Order::GoTo { .. })) else {
+                    self.say(t, format!("At {}.", yt.name));
+                    self.finish_order(t);
+                    return None;
+                };
+                let full = matches!(order, Order::Load { full: true, .. });
+                let from_node = if along { e.a } else { e.b };
+                let depth_of = |s: f64| if along { s } else { e.length - s };
+                match fac.mode {
+                    FacilityMode::Track { .. } => {
+                        self.set_run_phase(RunPhase::Waiting { queue: vec![], forward, along });
+                        Some(Maneuver::WaitWorked { car: None, edge: target, full, since: None, last_payload: None, last_change: None })
+                    }
+                    FacilityMode::Spot { s, max_speed } if max_speed >= 0.2 => {
+                        // Keep creeping until the last car is past the chute.
+                        let last = *queue.last().unwrap();
+                        let last_len = tr.cars.iter().find(|c| c.id == last).map(|c| types[c.type_id as usize].length).unwrap_or(16.0);
+                        let creep = Self::creep_speed(world, tr, last, &fac);
+                        self.set_run_phase(RunPhase::Creeping { queue, forward, along });
+                        Some(Maneuver::Drive(Drive::new(forward, Target::CarOnEdge { car: last, edge: target, from_node, depth: depth_of(s) + 0.5 * last_len + 1.0 }, 0.0, creep).patient()))
+                    }
+                    FacilityMode::Spot { .. } => {
+                        self.set_run_phase(RunPhase::Waiting { queue: queue.clone(), forward, along });
+                        Some(Maneuver::WaitWorked { car: queue.first().copied(), edge: target, full, since: None, last_payload: None, last_change: None })
+                    }
+                }
+            }
+            RunPhase::Creeping { queue, .. } => {
+                if let Some(fac) = fac {
+                    let (n, tonnes) = done_count(&fac, &queue);
+                    if fac.is_load() {
+                        self.say(t, format!("Loaded at {}: {n} of {} full, {tonnes:.0} t aboard.", yt.name, queue.len()));
+                    } else {
+                        self.say(t, format!("Unloaded at {}: {n} of {} empty.", yt.name, queue.len()));
+                    }
+                }
+                self.finish_order(t);
+                None
+            }
+            RunPhase::Waiting { mut queue, forward, along } => {
+                // The first car is done (or the facility is): on to the next.
+                if !queue.is_empty() {
+                    queue.remove(0);
+                }
+                let full = matches!(order, Order::Load { full: true, .. });
+                let dry = fac.map(|f| f.budget <= 1.0).unwrap_or(true);
+                if queue.is_empty() || (dry && !full) {
+                    if dry && !queue.is_empty() {
+                        self.say(t, format!("{} is out of stock. Taking what we have.", yt.name));
+                    } else {
+                        self.say(t, format!("Done at {}.", yt.name));
+                    }
+                    self.finish_order(t);
+                    return None;
+                }
+                let Some(fac) = fac else { self.finish_order(t); return None };
+                let Some(s) = fac.spot() else { self.finish_order(t); return None };
+                let next = queue[0];
+                let from_node = if along { e.a } else { e.b };
+                let depth = if along { s } else { e.length - s };
+                self.set_run_phase(RunPhase::Spotting { queue, forward, along });
+                Some(Maneuver::Drive(Drive::new(forward, Target::CarOnEdge { car: next, edge: target, from_node, depth }, 0.0, 3.0).patient()))
+            }
+            RunPhase::Spotting { queue, forward, along } => {
+                let full = matches!(order, Order::Load { full: true, .. });
+                self.set_run_phase(RunPhase::Waiting { queue: queue.clone(), forward, along });
+                Some(Maneuver::WaitWorked { car: queue.first().copied(), edge: target, full, since: None, last_payload: None, last_change: None })
+            }
+        }
+    }
+
     fn set_phase(&mut self, p: SortPhase) {
         if let Program::Sort(j) = &mut self.program {
             j.phase = p;
@@ -1103,6 +1559,19 @@ fn has_air(world: &World, tr: &Train) -> bool {
     tr.cars.iter().enumerate().any(|(i, c)| connected[i] && !c.brake.is_bled() && types[c.type_id as usize].loco.is_none())
 }
 
+/// Distance from path coordinate `x` on `tr` to the point `depth` along `edge` from
+/// `from_node`, travelling `forward`. Zero once past it.
+fn remaining_on_edge(world: &World, tr: &Train, x: f64, forward: bool, edge: EdgeId, from_node: NodeId, depth: f64) -> Option<f64> {
+    let e = world.graph.edge(edge);
+    match tr.locate(&world.graph, x) {
+        Some(loc) if loc.edge == edge => {
+            let progress = if e.a == from_node { loc.s } else { e.length - loc.s };
+            Some((depth - progress).max(0.0))
+        }
+        _ => world.distance_from_x_to_node(tr, x, forward, from_node, 30_000.0).map(|dn| dn + depth),
+    }
+}
+
 fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
     let t = world.t;
     let tr = world.train(id).unwrap();
@@ -1116,7 +1585,7 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
         hold(world, id);
         return Status::Done;
     }
-    if t - d.started.unwrap() > 1800.0 {
+    if t - d.started.unwrap() > if d.patient { 6.0 * 3600.0 } else { 1800.0 } {
         return Status::Failed("this move is taking too long".into());
     }
     let sign = if d.forward { 1.0 } else { -1.0 };
@@ -1165,11 +1634,25 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
             d.last_x = Some(tr.cars[0].x);
             (*total - *done).max(0.0)
         }
+        Target::FaceOnEdge { edge, from_node, depth } => {
+            let x = if d.forward { tr.head_face_x(types) } else { tr.tail_face_x(types) };
+            match remaining_on_edge(world, tr, x, d.forward, *edge, *from_node, *depth) {
+                Some(r) => r,
+                None => return Status::Failed("that track is not ahead of us".into()),
+            }
+        }
+        Target::CarOnEdge { car, edge, from_node, depth } => {
+            let Some(i) = tr.cars.iter().position(|c| c.id == *car) else { return Status::Failed("that car is no longer in the train".into()) };
+            match remaining_on_edge(world, tr, tr.cars[i].x, d.forward, *edge, *from_node, *depth) {
+                Some(r) => r,
+                None => return Status::Failed("that track is not ahead of us".into()),
+            }
+        }
     };
 
     // Speed limits: current edge, upcoming restriction, bumper, and anything standing ahead.
     let a = brake_decel(world, tr);
-    let mut vmax = d.vmax.min(world.current_limit(tr).unwrap_or(d.vmax));
+    let mut vmax = d.vmax.min(world.train_limit(tr).unwrap_or(d.vmax));
     match world.lookahead(tr, d.forward, 600.0) {
         Some(Ahead::Restriction { limit, distance, .. }) => vmax = vmax.min((limit * limit + 2.0 * a * distance).sqrt()),
         Some(Ahead::End { distance }) => vmax = vmax.min((2.0 * a * (distance - 8.0).max(0.0)).sqrt()),
@@ -1179,6 +1662,16 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
     let mut at_bumper = false;
     if let Some(Ahead::End { distance }) = world.lookahead(tr, d.forward, 60.0) {
         at_bumper = distance < 10.0;
+    }
+    // Facing switches on our route that are not lined yet: hold short of them.
+    let lead_face = if d.forward { End::Head } else { End::Tail };
+    for (node, route) in d.pending_switches.iter() {
+        if world.graph.turnout_setting(*node) == Some(*route) {
+            continue;
+        }
+        if let Some(dist) = world.distance_to_node(tr, lead_face, d.forward, *node, 3000.0) {
+            vmax = vmax.min((2.0 * a * (dist - 15.0).max(0.0)).sqrt());
+        }
     }
     if !d.push_through {
         let gap_ahead = if matches!(d.target, Target::ShortOfTrain { .. }) { Some(remaining) } else { world.distance_to_train_ahead(tr, d.forward, 600.0).map(|(g, _)| g) };
@@ -1244,6 +1737,9 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
     }
     let controls = if v_dir < -0.05 {
         Controls { throttle: 0, reverser: rev, independent: 1.0, auto_target: if air { FULL_SERVICE_PIPE } else { PIPE_REF }, ..Default::default() }
+    } else if v_target < 0.05 && v_dir.abs() < 0.05 {
+        // Held short of something: stand on the brakes rather than drift.
+        Controls { throttle: 0, reverser: rev, independent: 1.0, ..Default::default() }
     } else if err > 0.15 {
         let notch = (((err * 3.0).ceil() + d.notch_bias.floor()) as u8).clamp(1, 8);
         Controls { throttle: notch, reverser: rev, independent: 0.0, ..Default::default() }
@@ -1253,7 +1749,10 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
         let a_full = a / if air { 0.4 } else { 0.6 };
         let need = if remaining > 0.5 { ((v_dir * v_dir - d.v_end * d.v_end) / (2.0 * remaining)).max(0.0) } else { a_full };
         let frac = (need / a_full).max((-err) * 2.0).clamp(0.35, 1.0);
-        let reduction = if air { (frac * (PIPE_REF - FULL_SERVICE_PIPE)).clamp(30_000.0, PIPE_REF - FULL_SERVICE_PIPE) } else { 0.0 };
+        // Creeping, trim speed on the independent alone: the automatic is for stopping the
+        // train, not for holding it under a chute, and every touch of it is a pipe signal.
+        let creeping = v_target < 1.5 && remaining > 30.0;
+        let reduction = if air && !creeping { (frac * (PIPE_REF - FULL_SERVICE_PIPE)).clamp(30_000.0, PIPE_REF - FULL_SERVICE_PIPE) } else { 0.0 };
         Controls { throttle: 0, reverser: rev, independent: frac, auto_target: PIPE_REF - reduction, ..Default::default() }
     } else {
         let hold_notch = if v_dir > 0.5 && remaining > 30.0 { 1 } else { 0 };

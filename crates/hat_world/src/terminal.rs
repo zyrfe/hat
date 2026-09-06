@@ -144,7 +144,7 @@ fn attach_ladder(g: &mut TrackGraph, from: NodeId, from_pose: Pose, p: &Terminal
 }
 
 /// An S-curve: turn `sign` then back, ending parallel to the start, offset sideways.
-fn s_curve(g: &mut TrackGraph, from: NodeId, from_pose: Pose, r: f64, th: f64, sign: f64, speed: f64, track: Option<u32>, name: &str) -> (NodeId, Pose, Vec<EdgeId>) {
+pub(crate) fn s_curve(g: &mut TrackGraph, from: NodeId, from_pose: Pose, r: f64, th: f64, sign: f64, speed: f64, track: Option<u32>, name: &str) -> (NodeId, Pose, Vec<EdgeId>) {
     let a1 = Geometry::arc_from(from_pose, r, sign * th);
     let p1 = a1.end();
     let n1 = g.add_node(p1.pos, NodeKind::Plain, format!("{name} s1"));
@@ -215,11 +215,11 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
     for t in flat_tracks.iter_mut() {
         if t.id == TRACK_LOADER {
             t.name = "Loader (5)".into();
-            g.edges[t.edges[1] as usize].facility = Some(Facility::Load { commodity: Commodity::Coal, rate: p.loader_rate, max_speed: 0.3 });
+            g.edges[t.edges[1] as usize].facility = Some(Facility::load(Commodity::Coal, p.loader_rate, FacilityMode::Track { max_speed: 0.3 }));
         }
         if t.id == TRACK_DUMPER {
             t.name = "Dumper (6)".into();
-            g.edges[t.edges[1] as usize].facility = Some(Facility::Unload { rate: p.dumper_rate, max_speed: 0.3 });
+            g.edges[t.edges[1] as usize].facility = Some(Facility::unload(None, p.dumper_rate, FacilityMode::Track { max_speed: 0.3 }));
         }
         if t.id == TRACK_DEPARTURE {
             t.name = "Departure (1)".into();

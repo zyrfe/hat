@@ -308,6 +308,39 @@ mod tests {
         assert!(w.events.iter().any(|e| matches!(e, SimEvent::Derail { cause: DerailCause::SplitSwitch, .. })));
     }
 
+    /// The wreck crew lines the points under the wheels, and the train moves again.
+    #[test]
+    fn rerail_after_a_split_switch_lines_the_points_and_frees_the_train() {
+        let (g, yard) = build_ladder_yard(&YardParams::default());
+        let mut w = World::new(g);
+        let t1 = yard.tracks[0].edges[1];
+        let mut c = w.new_car(TYPE_SWITCHER);
+        c.brake = Brake::charged();
+        let id = w.spawn_train(vec![c], t1, 30.0, false).unwrap();
+        w.set_controls(id, Controls { throttle: 3, reverser: Reverser::Forward, independent: 0.0, ..Default::default() });
+        for _ in 0..(60.0 / DT) as usize {
+            w.step(DT);
+        }
+        assert!(w.train(id).unwrap().derailed);
+        let t1_switch = yard.ladder_switches[0];
+        assert_eq!(w.graph.turnout_setting(t1_switch), Some(Route::Normal));
+        assert!(w.train(id).unwrap().cars[0].damage > 0.0, "a derailment costs damage");
+        assert_eq!(w.rerail(id), Ok(1));
+        assert_eq!(w.graph.turnout_setting(t1_switch), Some(Route::Diverging), "points lined for the wheels");
+        assert!(w.events.iter().any(|e| matches!(e, SimEvent::Rerailed { cars: 1, .. })));
+        assert!(w.rerail(id).is_err());
+        // The lead switch is still lined for the main; the crew lines it before moving.
+        w.graph.set_route(yard.lead_switch, Route::Diverging);
+        w.set_controls(id, Controls { throttle: 2, reverser: Reverser::Forward, independent: 0.0, ..Default::default() });
+        for _ in 0..(40.0 / DT) as usize {
+            w.step(DT);
+        }
+        let tr = w.train(id).unwrap();
+        assert!(!tr.derailed, "should run through the lined switch: {:?}", w.events.iter().filter(|e| matches!(e, SimEvent::Derail { .. })).collect::<Vec<_>>());
+        let l = w.car_location(tr, 0).unwrap();
+        assert_ne!(w.graph.edge(l.edge).track, Some(1), "should have left track 1");
+    }
+
     #[test]
     fn occupied_switch_cannot_be_thrown() {
         let (g, yard) = build_ladder_yard(&YardParams::default());

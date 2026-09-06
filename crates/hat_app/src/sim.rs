@@ -96,15 +96,21 @@ pub struct Sim {
     /// What the locomotive's train is heading into.
     pub ahead: Option<Ahead>,
     pub cur_limit: Option<f64>,
-    /// The yard crew working this locomotive.
-    pub crew: Option<Crew>,
-    /// When true the crew drives; touching a control pauses it.
+    /// Every crew on the railroad. The yard crew, when there is one, comes first.
+    pub crews: Vec<Crew>,
+    pub yard_crew: Option<usize>,
+    /// The locomotive the cab window and the levers belong to.
+    pub active_loco: Option<CarId>,
+    /// When true the active crew drives; touching a control pauses it.
     pub auto: bool,
     pub manual_touch: bool,
     /// Road traffic and the yard master, for terminal scenarios.
     pub dispatcher: Option<Dispatcher>,
     /// Events from the most recent sim step, fed to the dispatcher on the next.
     pub last_events: Vec<SimEvent>,
+    /// Money and industries, for open-country scenarios.
+    pub economy: Option<Economy>,
+    pub wrecker: Wrecker,
 }
 
 impl Sim {
@@ -112,9 +118,9 @@ impl Sim {
         let scenarios = all_scenarios();
         let scenario_index = index % scenarios.len();
         let scenario = scenarios[scenario_index].clone();
-        let Built { world, yard, loco, dispatcher, initial_program, .. } = build(&scenario);
+        let Built { world, yard, loco, dispatcher, initial_program, economy, road_crews, .. } = build(&scenario);
         let controls = world.train(loco).map(|t| t.controls.clone()).unwrap_or_default();
-        let auto = scenario.kind == ScenarioKind::Terminal;
+        let auto = matches!(scenario.kind, ScenarioKind::Terminal | ScenarioKind::Branch);
         let mut s = Sim {
             world,
             yard,
@@ -122,7 +128,7 @@ impl Sim {
             scenario_index,
             score: Score::default(),
             controls,
-            time_scale: 1,
+            time_scale: std::env::var("HAT_TIME_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
             last_eval: 0.0,
             pending_events: Vec::new(),
             car_index: HashMap::new(),
@@ -133,16 +139,30 @@ impl Sim {
             banner: None,
             ahead: None,
             cur_limit: None,
-            crew: None,
+            crews: Vec::new(),
+            yard_crew: None,
+            active_loco: None,
             auto,
             manual_touch: false,
             dispatcher,
             last_events: Vec::new(),
+            economy,
+            wrecker: Wrecker::default(),
         };
         let loco_car = s.world.train(loco).map(|t| t.cars[0].id);
         if let Some(car) = loco_car {
-            s.crew = Some(Crew::new("R. Casey", car, initial_program, 0.0));
+            s.crews.push(Crew::new("R. Casey", car, initial_program, 0.0));
+            s.yard_crew = Some(0);
         }
+        s.crews.extend(road_crews);
+        // Scenarios that start on the levers keep the yard crew off them until asked.
+        if !auto {
+            for c in s.crews.iter_mut() {
+                c.paused = true;
+            }
+        }
+        // In open country the first road train is the one to watch.
+        s.active_loco = if s.crews.len() > 1 && s.scenario.kind == ScenarioKind::Branch { Some(s.crews[1].loco_car) } else { loco_car };
         s.rebuild_index();
         s.score.evaluate(&s.world, &s.yard, s.scenario.time_budget);
         s
@@ -157,10 +177,70 @@ impl Sim {
         }
     }
 
-    /// Train index and car index of the locomotive.
+    /// Train index and car index of the active locomotive.
     pub fn loco_pos(&self) -> Option<(usize, usize)> {
+        if let Some(id) = self.active_loco {
+            if let Some(p) = self.world.train_of_car(id) {
+                return Some(p);
+            }
+        }
         let types = &self.world.car_types;
         self.world.trains.iter().enumerate().find_map(|(ti, t)| t.control_car(types).map(|ci| (ti, ci)))
+    }
+
+    /// The crew riding the active locomotive.
+    pub fn crew(&self) -> Option<&Crew> {
+        let id = self.active_loco.or_else(|| self.loco_car().map(|c| c.id))?;
+        self.crews.iter().find(|c| c.loco_car == id)
+    }
+
+    pub fn crew_mut(&mut self) -> Option<&mut Crew> {
+        let id = self.active_loco.or_else(|| self.loco_car().map(|c| c.id))?;
+        self.crews.iter_mut().find(|c| c.loco_car == id)
+    }
+
+    /// Make a locomotive the one the cab and the levers belong to.
+    pub fn take_loco(&mut self, car: CarId) {
+        if self.active_loco == Some(car) {
+            return;
+        }
+        self.active_loco = Some(car);
+        self.adopt_train_controls();
+        self.auto = self.crew().map(|c| !c.paused).unwrap_or(false);
+    }
+
+    /// Call the wreck crew for the train holding `car`.
+    pub fn action_rerail(&mut self, sel: Sel) {
+        let car = match sel {
+            Sel::Car(id) => id,
+            Sel::Coupler(f, _) => f,
+            Sel::None => match self.loco_car() {
+                Some(c) => c.id,
+                None => {
+                    self.say("Select a car of the derailed train first");
+                    return;
+                }
+            },
+        };
+        let Some((ti, _)) = self.world.train_of_car(car) else {
+            self.say("Car not found");
+            return;
+        };
+        let id = self.world.trains[ti].id;
+        match self.wrecker.request(&self.world, id) {
+            Ok(job) => {
+                let msg = format!("Wreck crew called: about {} and {}", hat_units::fmt::duration(job.done_at - job.started), money(job.cost));
+                self.say(msg);
+                let t = self.world.t;
+                self.engineer.react(t, Mood::Worried, 6.0, "Wreck crew's on the way.", true);
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
+    /// Crews with a job, for the payroll.
+    pub fn crews_on_duty(&self) -> usize {
+        self.crews.iter().filter(|c| c.status == Status::Running && !matches!(c.program, Program::Idle)).count()
     }
 
     pub fn loco_train(&self) -> Option<&Train> {
@@ -319,15 +399,27 @@ impl Sim {
 
     pub fn resume_crew(&mut self) {
         let t = self.world.t;
-        if let Some(c) = self.crew.as_mut() {
+        if let Some(c) = self.crew_mut() {
             c.paused = false;
             if c.status != Status::Running {
                 c.status = Status::Running;
                 c.current = None;
             }
+            c.replan();
             c.say(t, "Crew has the engine.");
         }
         self.auto = true;
+    }
+
+    pub fn pause_crew(&mut self, why: &str) {
+        let t = self.world.t;
+        if let Some(c) = self.crew_mut() {
+            if !c.paused {
+                c.paused = true;
+                c.say(t, format!("You have the engine ({why})."));
+            }
+        }
+        self.auto = false;
     }
 
     pub fn action_throw_switch(&mut self, node: NodeId) {
@@ -353,46 +445,53 @@ fn step_sim(mut sim: ResMut<Sim>) {
     let t0 = sim.world.t;
     if sim.manual_touch {
         if sim.auto {
-            if let Some(c) = sim.crew.as_mut() {
-                if !c.paused {
-                    c.paused = true;
-                    c.say(t0, "You have the engine.");
-                }
-            }
+            sim.pause_crew("you touched a control");
         }
         sim.manual_touch = false;
     }
-    let crew_drives = sim.auto && sim.crew.as_ref().map(|c| !c.paused && c.status == Status::Running).unwrap_or(false);
+    let crew_drives = sim.auto && sim.crew().map(|c| !c.paused && c.status == Status::Running).unwrap_or(false);
     if !crew_drives {
         sim.apply_controls();
     }
     let n = sim.time_scale;
+    let on_duty = sim.crews_on_duty();
     let mut events: Vec<SimEvent> = Vec::new();
     for _ in 0..n {
         {
-            let Sim { crew, world, dispatcher, last_events, .. } = &mut *sim;
-            if let (Some(d), Some(c)) = (dispatcher.as_mut(), crew.as_mut()) {
-                d.step(world, c, last_events, DT);
+            let Sim { crews, yard_crew, world, dispatcher, last_events, economy, wrecker, .. } = &mut *sim;
+            if let Some(e) = economy.as_ref() {
+                e.before_step(world);
             }
-            if crew_drives {
-                if let Some(c) = crew.as_mut() {
+            if let (Some(d), Some(yi)) = (dispatcher.as_mut(), *yard_crew) {
+                d.step(world, &mut crews[yi], last_events, DT);
+            }
+            for c in crews.iter_mut() {
+                if !c.paused {
                     c.step(world, DT);
                 }
             }
             world.step(DT);
             *last_events = world.take_events();
+            if let Some(e) = economy.as_mut() {
+                e.after_step(world, last_events, DT, on_duty);
+            }
+            wrecker.step(world, economy.as_mut().map(|e| &mut e.ledger));
             events.extend(last_events.iter().cloned());
         }
     }
     if crew_drives {
         sim.adopt_train_controls();
-        let line = sim.crew.as_ref().and_then(|c| c.radio.back().cloned());
+        let line = sim.crew().and_then(|c| c.radio.back().cloned());
         if let Some((lt, line)) = line {
             if lt >= t0 {
                 let now = sim.world.t;
                 sim.engineer.react(now, Mood::Focused, 4.0, &line, false);
             }
         }
+    }
+    let wreck_lines: Vec<String> = sim.wrecker.log.iter().filter(|(lt, _)| *lt >= t0).map(|(_, l)| l.clone()).collect();
+    for l in wreck_lines {
+        sim.say(l);
     }
     let t = sim.world.t;
     let frame_changed = events.iter().any(|e| matches!(e, SimEvent::Coupled { .. } | SimEvent::Uncoupled { .. } | SimEvent::KnuckleBreak { .. }));
@@ -456,7 +555,12 @@ fn react_to_events(sim: &mut Sim, events: &[SimEvent], t: f64) {
                     DerailCause::Bumper => "hit the bumper".to_string(),
                 };
                 sim.engineer.react(t, Mood::Panic, 60.0, "We're on the ground.", true);
-                sim.banner = Some(Banner { text: format!("DERAILED: {why}"), until: f64::INFINITY, color: [240, 70, 60] });
+                sim.banner = Some(Banner { text: format!("DERAILED: {why}. Select a car and call the wreck crew."), until: f64::INFINITY, color: [240, 70, 60] });
+            }
+            SimEvent::Rerailed { cars, .. } => {
+                sim.engineer.react(t, Mood::Pleased, 6.0, "Back on the rails.", true);
+                sim.engineer.sticky = false;
+                sim.banner = Some(Banner { text: format!("RERAILED {cars} car{}", if *cars == 1 { "" } else { "s" }), until: t + 5.0, color: [110, 200, 120] });
             }
             SimEvent::Emergency { .. } => sim.engineer.react(t, Mood::Alarmed, 5.0, "Big hole!", false),
             SimEvent::BumperHit { speed, .. } => {
