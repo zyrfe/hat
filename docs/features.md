@@ -190,6 +190,9 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Crew executor: resumable maneuvers (route, move, couple, pull clear, shove, kick, cut, tie down) | M1 | done | plus hump cutting on the move, bleed, lace, charge; kick later |
 | Switch list orders and greedy block planner | M1 | done | per-car destinations editable in the selection panel |
 | Auto/manual override with plan panel and radio lines | M1 | done | touching a control pauses the crew |
+| Manual/Auto switch (M): in Auto WASD pans the map and the crew holds the levers; emergency handle always takes over | M2 | done | |
+| Engineer's hand: one notch at a time, slewed brake handles, grade starts, creep trimmed on the independent | M2 | done | no more notch eight to idle in one step |
+| Prime mover loading lag on tractive effort | M2 | done | POWER_TAU 0.8 s, applies to player and crew |
 | Walking time and crew skill | M3 | idea | crew.md |
 | Dispatcher: road trains in and out through a portal, yard master assigning hump and sort jobs | M3 | done | traffic.rs; one road train at a time |
 | Terminal scenario runs unaided end to end as a test | M3 | done | inbound, hump, sort, load, unload, departure |

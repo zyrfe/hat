@@ -852,11 +852,15 @@ fn step_train(train: &mut Train, graph: &TrackGraph, types: &[CarType], t: f64, 
         let mut ind = 0.0;
         if let Some(spec) = &ct.loco {
             let r = controls.reverser.sign();
-            if r != 0.0 && controls.throttle > 0 {
-                let notch = controls.throttle.min(8) as f64 / 8.0;
+            let want = if r != 0.0 && controls.throttle > 0 { controls.throttle.min(8) as f64 / 8.0 } else { 0.0 };
+            car.power += (want - car.power) * (1.0 - (-dt / POWER_TAU).exp());
+            if car.power < 1e-4 {
+                car.power = 0.0;
+            }
+            if r != 0.0 && car.power > 0.0 {
                 let te = (spec.power_rail / car.v.abs().max(0.5)).min(spec.adhesion * m * G);
-                drive += r * notch * te;
-                car.work_j += notch * te * car.v.abs() * dt;
+                drive += r * car.power * te;
+                car.work_j += car.power * te * car.v.abs() * dt;
             }
             ind = controls.independent.clamp(0.0, 1.0) * spec.independent_max;
         }

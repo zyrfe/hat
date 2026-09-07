@@ -156,6 +156,9 @@ pub struct CarState {
     pub delivered_acc: f64,
     /// Tractive work done at the rail by this car, J. Locomotives only. Fuel follows from it.
     pub work_j: f64,
+    /// Share of full power the prime mover is actually delivering, 0..1. Follows the notch
+    /// with a lag: a diesel loads up over a second or two, it does not step.
+    pub power: f64,
 }
 
 impl CarState {
@@ -179,6 +182,7 @@ impl CarState {
             origin: None,
             delivered_acc: 0.0,
             work_j: 0.0,
+            power: 0.0,
         }
     }
 

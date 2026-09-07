@@ -54,10 +54,24 @@ independent brake alone so the pipe stays quiet. A spout that wants standing car
 car spotted in turn, and the crew leaves when the pile is empty unless the order said full.
 The order editor lives in the Trains panel; editing re-plans from the current order.
 
-## Manual override
+## The engineer's hand
 
-The cab levers stay live. Touching a lever pauses the executor ("You have the engine") and
-the plan waits. A Resume button hands it back. The crew never fights the player.
+The controller may ask for anything; the hand between it and the levers moves like a
+person's. The throttle goes one notch at a time, 0.7 s up and 0.35 s down; the independent
+handle slews at 0.7 of its travel per second; the automatic target slews at 60 kPa/s in
+10 kPa steps so the pipe sees handle moves, not a smear. Starting or sliding back on a
+grade, power comes up while the independent eases off with the notch. Creeping under a
+chute, the crew works a low notch against the independent and trims speed on the brake
+handle, not by flipping the throttle. On speed it leaves the notch where it is. The sim
+adds its own lag underneath: a diesel's prime mover loads toward the notch with a 0.8 s time
+constant, so tractive effort ramps for the player's levers too.
+
+## Manual and Auto
+
+One switch, M, says who holds the levers of the active engine. In Auto the crew drives
+and WASD pans the map like the arrows; dragging a lever or hitting the emergency handle
+takes the engine over. In Manual the keys drive and the crew stands by; switching back
+re-plans from the current order. The crew never fights the player.
 
 ## Feedback
 

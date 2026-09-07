@@ -199,6 +199,33 @@ impl Sim {
         self.crews.iter_mut().find(|c| c.loco_car == id)
     }
 
+    /// Manual: the player holds this engine's levers and the drive keys drive. Otherwise
+    /// the crew has them and WASD pans the map.
+    pub fn is_manual(&self) -> bool {
+        match self.crew() {
+            Some(c) => c.paused || c.status != Status::Running,
+            None => true,
+        }
+    }
+
+    pub fn set_manual(&mut self, manual: bool) {
+        if manual {
+            if !self.is_manual() {
+                self.pause_crew("Manual");
+            }
+            self.auto = false;
+        } else if self.crew().is_some() {
+            self.resume_crew();
+        } else {
+            self.say("No crew on this engine to hand it to");
+        }
+    }
+
+    pub fn toggle_manual(&mut self) {
+        let m = self.is_manual();
+        self.set_manual(!m);
+    }
+
     /// Make a locomotive the one the cab and the levers belong to.
     pub fn take_loco(&mut self, car: CarId) {
         if self.active_loco == Some(car) {

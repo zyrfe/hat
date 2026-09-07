@@ -128,9 +128,17 @@ fn hud(
     egui::Panel::top("top").show(&mut root, |ui| {
         ui.horizontal(|ui| {
             ui.heading(sim.scenario.name);
-            if let Some(c) = sim.crew() {
-                let paused = c.paused;
-                ui.colored_label(if paused { Color32::from_rgb(250, 190, 60) } else { Color32::from_rgb(110, 200, 120) }, if paused { format!("{}: you have the engine", c.name) } else { format!("{}: crew driving", c.name) });
+            {
+                let manual = sim.is_manual();
+                let crew_name = sim.crew().map(|c| c.name.clone());
+                let (color, text) = if manual {
+                    (Color32::from_rgb(250, 190, 60), "MANUAL (M): you drive".to_string())
+                } else {
+                    (Color32::from_rgb(110, 200, 120), format!("AUTO (M): {} drives", crew_name.clone().unwrap_or_else(|| "crew".into())))
+                };
+                if ui.add(egui::Button::new(egui::RichText::new(text).color(color).strong()).frame(true)).on_hover_text("Toggle who holds the levers. In Auto, WASD pans the map.").clicked() {
+                    sim.toggle_manual();
+                }
             }
             if let Some(e) = sim.economy.as_ref() {
                 ui.separator();
@@ -388,7 +396,11 @@ fn hud(
     if ui_state.show_help {
         egui::Window::new("Controls").collapsible(false).show(ctx, |ui| {
             ui.monospace(
-                "Locomotive\n\
+                "Manual / Auto\n\
+                 M          toggle. Auto: the crew drives and WASD pans the map.\n\
+                            Manual: the keys below drive. Dragging a lever also takes over.\n\
+                 \n\
+                 Locomotive (Manual)\n\
                  W / S      throttle notch up / down\n\
                  D / A      reverser toward forward / reverse (neutral between)\n\
                  X / Z      independent brake more / less\n\
@@ -410,7 +422,7 @@ fn hud(
                  \n\
                  View\n\
                  left-drag on the ground  pan (a click still selects)\n\
-                 arrows     pan    wheel  zoom    right-drag  orbit    middle-drag  pan\n\
+                 arrows, or WASD in Auto   pan    wheel  zoom    right-drag  orbit    middle-drag  pan\n\
                  minimap    click or drag to jump the view there\n\
                  F          follow locomotive     Home  reset camera\n\
                  \n\
@@ -563,26 +575,22 @@ fn selection_panel(ui: &mut egui::Ui, sim: &mut Sim, s: Sel, u: UnitSystem) {
 }
 
 fn crew_panel(ui: &mut egui::Ui, sim: &mut Sim) {
-    let mut auto = sim.auto;
-    if ui.checkbox(&mut auto, "Auto: the crew drives this engine").changed() {
-        if auto {
-            sim.resume_crew();
-        } else {
-            sim.pause_crew("Auto switched off");
-        }
+    let mut manual = sim.is_manual();
+    if ui.checkbox(&mut manual, "Manual: you hold the levers (M)").on_hover_text("Off: the crew drives and WASD pans the map. Touching a lever switches to Manual.").changed() {
+        sim.set_manual(manual);
     }
     let Some(crew) = sim.crew() else {
         ui.label("No crew on this engine.");
         return;
     };
     let status = match &crew.status {
-        Status::Running => if crew.paused { "paused, you have the engine".to_string() } else { crew.describe() },
+        Status::Running => if crew.paused { "standing by while you drive".to_string() } else { crew.describe() },
         Status::Done => format!("shift complete in {}", uf::duration(crew.finished_at.unwrap_or(0.0) - crew.started_at)),
         Status::Failed(why) => format!("stuck: {why}"),
     };
     ui.label(format!("{}: {status}", crew.name));
     let mut resume = false;
-    if crew.paused && sim.auto || matches!(crew.status, Status::Failed(_)) {
+    if matches!(crew.status, Status::Failed(_)) {
         if ui.button("Resume crew").clicked() {
             resume = true;
         }
@@ -622,7 +630,7 @@ fn trains_panel(ui: &mut egui::Ui, sim: &mut Sim, ui_state: &mut UiState) {
     for (ci, crew) in sim.crews.iter().enumerate() {
         let is_active = active == Some(crew.loco_car);
         let status = match &crew.status {
-            Status::Running => if crew.paused { "you have the engine".to_string() } else { crew.describe() },
+            Status::Running => if crew.paused { "manual".to_string() } else { crew.describe() },
             Status::Done => "done".to_string(),
             Status::Failed(why) => format!("stuck: {why}"),
         };

@@ -78,6 +78,9 @@ pub const DERAIL_DAMAGE_PER_MPS: f64 = 0.2;
 
 pub const V_EPS: f64 = 1e-3;
 
+/// Time constant of the prime mover loading toward the commanded notch, s.
+pub const POWER_TAU: f64 = 0.8;
+
 /// Deceleration a retarder applies to a car above its release speed, m/s².
 pub const RETARDER_DECEL: f64 = 1.5;
 /// Within this distance of standing cars a retarder releases at the close speed instead.

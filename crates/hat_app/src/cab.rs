@@ -119,6 +119,9 @@ pub fn cab_window(ctx: &egui::Context, sim: &mut Sim, view: &CabView, u: UnitSys
                     });
                     gauges(ui, sim, u);
                     levers(ui, sim);
+                    if !sim.is_manual() {
+                        ui.small(egui::RichText::new("Crew has the levers. Drag one or press M to take them.").color(egui::Color32::from_rgb(110, 200, 120)));
+                    }
                 });
             });
             ui.separator();

@@ -128,19 +128,21 @@ fn control(
     let fwd = Vec3::new(-sy, 0.0, -cy);
     let right = Vec3::new(cy, 0.0, -sy);
     let mut moved = false;
-    if keys.pressed(KeyCode::ArrowUp) {
+    // WASD pans too, unless the player is driving, when those keys are the throttle.
+    let wasd = !sim.is_manual();
+    if keys.pressed(KeyCode::ArrowUp) || (wasd && keys.pressed(KeyCode::KeyW)) {
         rig.focus += fwd * pan;
         moved = true;
     }
-    if keys.pressed(KeyCode::ArrowDown) {
+    if keys.pressed(KeyCode::ArrowDown) || (wasd && keys.pressed(KeyCode::KeyS)) {
         rig.focus -= fwd * pan;
         moved = true;
     }
-    if keys.pressed(KeyCode::ArrowRight) {
+    if keys.pressed(KeyCode::ArrowRight) || (wasd && keys.pressed(KeyCode::KeyD)) {
         rig.focus += right * pan;
         moved = true;
     }
-    if keys.pressed(KeyCode::ArrowLeft) {
+    if keys.pressed(KeyCode::ArrowLeft) || (wasd && keys.pressed(KeyCode::KeyA)) {
         rig.focus -= right * pan;
         moved = true;
     }

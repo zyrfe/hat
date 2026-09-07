@@ -49,9 +49,18 @@ fn keyboard(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let control_keys = [KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyA, KeyCode::KeyD, KeyCode::KeyX, KeyCode::KeyZ, KeyCode::KeyV, KeyCode::KeyC, KeyCode::Backspace];
-    if control_keys.iter().any(|k| keys.just_pressed(*k)) {
-        sim.manual_touch = true;
+    if keys.just_pressed(KeyCode::KeyM) {
+        sim.toggle_manual();
+    }
+    // The emergency handle always works: it takes the engine from the crew on the way.
+    if keys.just_pressed(KeyCode::Backspace) && !sim.is_manual() {
+        sim.set_manual(true);
+    }
+    // Drive keys belong to the player only in Manual; otherwise WASD pans the map (camera.rs).
+    let manual = sim.is_manual();
+    if !manual {
+        drive_free_keys(&keys, &mut sim, &mut sel, &mut ui, &mut window, &mut exit);
+        return;
     }
     if keys.just_pressed(KeyCode::KeyW) {
         sim.controls.throttle = (sim.controls.throttle + 1).min(8);
@@ -90,7 +99,11 @@ fn keyboard(
         sim.controls.throttle = 0;
         sim.say("EMERGENCY: pipe dumped");
     }
+    drive_free_keys(&keys, &mut sim, &mut sel, &mut ui, &mut window, &mut exit);
+}
 
+/// Keys that mean the same thing whether the player or the crew is driving.
+fn drive_free_keys(keys: &ButtonInput<KeyCode>, sim: &mut Sim, sel: &mut Selection, ui: &mut UiState, window: &mut Window, exit: &mut MessageWriter<AppExit>) {
     let s = sel.sel;
     if keys.just_pressed(KeyCode::Space) {
         sim.action_pull_pin(s);

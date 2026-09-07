@@ -297,8 +297,12 @@ mod tests {
             eprintln!("  crew     [{:5.0} min] {l}", t / 60.0);
         }
         eprintln!("derails {derails} hard joints {hard} t={:.0} min", world.t / 60.0);
-        if matches!(crew.status, Status::Failed(_)) {
+        if matches!(crew.status, Status::Failed(_)) || std::env::var("HAT_DEBUG").is_ok() {
             eprintln!("{}", crew.debug_state(&world));
+            for tr in &world.trains {
+                let loc = world.car_location(tr, 0).map(|l| (world.graph.edge(l.edge).track, l.s, world.graph.edge(l.edge).grade));
+                eprintln!("  train {} ({} cars) head at {:?} v={:.2} derailed={}", tr.id, tr.cars.len(), loc, tr.cars[0].v, tr.derailed);
+            }
         }
         assert!(!matches!(crew.status, Status::Failed(_)), "yard crew stuck: {:?}", crew.status);
         assert_eq!(derails, 0);

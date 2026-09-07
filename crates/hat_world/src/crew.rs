@@ -286,6 +286,61 @@ pub enum SortPhase {
     Done,
 }
 
+/// How fast the engineer's hand moves. Notches one at a time; brakes slew.
+const NOTCH_UP_S: f64 = 0.7;
+const NOTCH_DOWN_S: f64 = 0.35;
+/// Independent brake handle travel per second, full scale 1.
+const IND_SLEW: f64 = 0.7;
+/// Automatic brake target travel, Pa/s, quantized so the pipe sees steps, not a smear.
+const AUTO_SLEW: f64 = 60_000.0;
+const AUTO_STEP: f64 = 10_000.0;
+
+/// The engineer's hand between the controller and the levers. The controller may ask for
+/// anything; the hand moves the throttle one notch at a time and eases the brakes, so the
+/// train never sees notch eight one step and idle the next.
+#[derive(Clone, Debug, Default)]
+pub struct Hand {
+    pub notch: u8,
+    pub independent: f64,
+    pub auto_target: f64,
+    moved_at: f64,
+    synced: bool,
+}
+
+impl Hand {
+    /// Start from where the levers are.
+    pub fn sync(&mut self, c: &Controls, t: f64) {
+        self.notch = c.throttle;
+        self.independent = c.independent;
+        self.auto_target = c.auto_target;
+        self.moved_at = t - NOTCH_UP_S;
+        self.synced = true;
+    }
+
+    pub fn toward(&mut self, want: &Controls, t: f64, dt: f64) -> Controls {
+        if !self.synced {
+            self.sync(want, t);
+        }
+        if want.throttle > self.notch && t - self.moved_at >= NOTCH_UP_S {
+            self.notch += 1;
+            self.moved_at = t;
+        } else if want.throttle < self.notch && t - self.moved_at >= NOTCH_DOWN_S {
+            self.notch -= 1;
+            self.moved_at = t;
+        }
+        let di = want.independent - self.independent;
+        self.independent = (self.independent + di.clamp(-IND_SLEW * dt, IND_SLEW * dt)).clamp(0.0, 1.0);
+        if want.emergency {
+            self.auto_target = 0.0;
+        } else {
+            let da = want.auto_target - self.auto_target;
+            self.auto_target += da.clamp(-AUTO_SLEW * dt, AUTO_SLEW * dt);
+        }
+        let auto_q = if want.emergency { 0.0 } else { (self.auto_target / AUTO_STEP).round() * AUTO_STEP };
+        Controls { throttle: self.notch, reverser: want.reverser, independent: self.independent, auto_target: auto_q, emergency: want.emergency }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Crew {
     pub name: String,
@@ -307,11 +362,13 @@ pub struct Crew {
     /// Traces of the last drives that completed, for debugging.
     pub last_drive: Option<Drive>,
     pub prev_drive: Option<Drive>,
+    /// Where the levers are, as this crew last left them.
+    pub hand: Hand,
 }
 
 impl Crew {
     pub fn new(name: impl Into<String>, loco_car: CarId, program: Program, t: f64) -> Self {
-        Crew { name: name.into(), loco_car, program, current: None, paused: false, status: Status::Running, radio: VecDeque::new(), deliveries: 0, started_at: t, finished_at: None, pending_after_route: None, stalled_since: None, repositioned: false, last_drive: None, prev_drive: None }
+        Crew { name: name.into(), loco_car, program, current: None, paused: false, status: Status::Running, radio: VecDeque::new(), deliveries: 0, started_at: t, finished_at: None, pending_after_route: None, stalled_since: None, repositioned: false, last_drive: None, prev_drive: None, hand: Hand::default() }
     }
 
     /// A Sort job for a yard with a single ladder off `lead_switch`.
@@ -352,6 +409,7 @@ impl Crew {
     /// Forget what was in progress and plan afresh from the current order. Used after a
     /// manual override or a failure, when the train may be anywhere.
     pub fn replan(&mut self) {
+        self.hand.synced = false;
         if let Program::Run(j) = &mut self.program {
             j.phase = RunPhase::Next;
             if !j.schedule.orders.is_empty() {
@@ -517,7 +575,7 @@ impl Crew {
                 }
                 Status::Done
             }
-            Maneuver::Drive(d) => drive(d, world, id, dt),
+            Maneuver::Drive(d) => drive(d, &mut self.hand, world, id, dt),
             Maneuver::PullPin { k, tries, bunching_until, retry_at, nudge_back, moving } => {
                 if let Some(until) = *bunching_until {
                     if t < until {
@@ -638,7 +696,7 @@ impl Crew {
                 }
                 pending.retain(|(node, route)| world.graph.turnout_setting(*node) != Some(*route));
                 d.pending_switches = pending;
-                drive(d, world, id, dt)
+                drive(d, &mut self.hand, world, id, dt)
             }
             Maneuver::WaitWorked { car, edge, full, since, last_payload, last_change } => {
                 hold(world, id);
@@ -1177,8 +1235,10 @@ impl Crew {
             HumpPhase::Follow => {
                 // The loose car was cut with its centre 3 m short of the crest. Push it a little
                 // past, no further, so the next car stops short of its own cut point.
+                // Hand over still moving: braking to a stand right at the crest can leave the
+                // loose car balanced on it. The Line that follows holds the engine.
                 let forward = Self::dir_to(world, tr, hump.crest).unwrap_or(li != 0);
-                Some(Maneuver::Drive(Drive::new(forward, Target::Distance { total: 4.5, done: 0.0 }, 0.0, 1.5).pushing()))
+                Some(Maneuver::Drive(Drive::new(forward, Target::Distance { total: 4.5, done: 0.0 }, 0.8, 1.5).pushing()))
             }
             HumpPhase::Spacing => None,
             HumpPhase::Parking | HumpPhase::Done => None,
@@ -1306,7 +1366,7 @@ impl Crew {
     /// Speed to creep under a chute so every car fills before it is past, m/s.
     fn creep_speed(world: &World, tr: &Train, car: CarId, fac: &Facility) -> f64 {
         let ct = tr.cars.iter().find(|c| c.id == car).map(|c| &world.car_types[c.type_id as usize]);
-        let by_rate = ct.map(|ct| fac.rate * ct.length / ct.m_payload_max.max(1.0) * 0.65).unwrap_or(0.3);
+        let by_rate = ct.map(|ct| fac.rate * ct.length / ct.m_payload_max.max(1.0) * 0.55).unwrap_or(0.3);
         by_rate.clamp(0.1, fac.max_speed() * 0.9)
     }
 
@@ -1572,7 +1632,7 @@ fn remaining_on_edge(world: &World, tr: &Train, x: f64, forward: bool, edge: Edg
     }
 }
 
-fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
+fn drive(d: &mut Drive, hand: &mut Hand, world: &mut World, id: TrainId, dt: f64) -> Status {
     let t = world.t;
     let tr = world.train(id).unwrap();
     let types = &world.car_types;
@@ -1580,6 +1640,7 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
     if d.cars_at_start.is_none() {
         d.cars_at_start = Some(n);
         d.started = Some(t);
+        hand.sync(&tr.controls, t);
     }
     if d.stop_on_couple && n > d.cars_at_start.unwrap() {
         hold(world, id);
@@ -1735,11 +1796,26 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
     } else {
         d.last_progress = Some(t);
     }
-    let controls = if v_dir < -0.05 {
+    // Starting, or sliding back on a grade: power comes up a notch at a time while the
+    // independent eases off with it, the way a grade start is made.
+    let brake_for_start = (0.9 - 0.2 * hand.notch as f64).max(0.0);
+    let want = if v_dir < -0.5 {
+        // Running away backwards: stop it first.
         Controls { throttle: 0, reverser: rev, independent: 1.0, auto_target: if air { FULL_SERVICE_PIPE } else { PIPE_REF }, ..Default::default() }
     } else if v_target < 0.05 && v_dir.abs() < 0.05 {
         // Held short of something: stand on the brakes rather than drift.
         Controls { throttle: 0, reverser: rev, independent: 1.0, ..Default::default() }
+    } else if v_dir < -0.05 || (err > 0.15 && v_dir < 0.15) {
+        let notch = (((err.max(0.3) * 3.0).ceil() + d.notch_bias.floor()) as u8).clamp(1, 8);
+        Controls { throttle: notch, reverser: rev, independent: brake_for_start, ..Default::default() }
+    } else if v_target < 1.0 && remaining > 3.0 {
+        // Creeping: a low notch worked against the independent. Speed is trimmed on the
+        // brake handle, which moves smoothly, not by flipping the throttle.
+        // The integral bias still climbs the notches when the train will not move: a heavy
+        // cut on a grade needs power, not a light hand.
+        let notch = (if err > 0.3 { 2 } else { 1 } + d.notch_bias.floor() as u8).min(8);
+        let ind = (0.15 - err * 1.5 - d.notch_bias * 0.1).clamp(0.0, 0.9);
+        Controls { throttle: notch, reverser: rev, independent: ind, ..Default::default() }
     } else if err > 0.15 {
         let notch = (((err * 3.0).ceil() + d.notch_bias.floor()) as u8).clamp(1, 8);
         Controls { throttle: notch, reverser: rev, independent: 0.0, ..Default::default() }
@@ -1755,9 +1831,11 @@ fn drive(d: &mut Drive, world: &mut World, id: TrainId, dt: f64) -> Status {
         let reduction = if air && !creeping { (frac * (PIPE_REF - FULL_SERVICE_PIPE)).clamp(30_000.0, PIPE_REF - FULL_SERVICE_PIPE) } else { 0.0 };
         Controls { throttle: 0, reverser: rev, independent: frac, auto_target: PIPE_REF - reduction, ..Default::default() }
     } else {
-        let hold_notch = if v_dir > 0.5 && remaining > 30.0 { 1 } else { 0 };
+        // On speed: leave the notch where it is, brakes off.
+        let hold_notch = if v_dir > 0.5 && remaining > 30.0 { hand.notch.max(1) } else { 0 };
         Controls { throttle: hold_notch, reverser: rev, independent: 0.0, ..Default::default() }
     };
+    let controls = hand.toward(&want, t, dt);
     let period = if remaining < 60.0 { 1.0 } else { 5.0 };
     if d.trace.back().map(|b| t - b.0 >= period).unwrap_or(true) {
         d.trace.push_back((t, v_dir, v_target, remaining, controls.throttle, controls.independent));
