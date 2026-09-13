@@ -142,6 +142,8 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 
 | Feature | Milestone | Status | Notes |
 |---|---|---|---|
+| Heightfield stand-in shaped by the track and by landforms: flat formation under track and industry pads, 1.5:1 cuts and fills, hills and river valleys from the world, rolling noise, height and slope tints with contour steps, ground picking | M1 | done | render side only; ADR-0007 replaces where the heights come from |
+| Bridges where a fill would be too high, over rivers and where a line crosses over itself; tunnels where a cut would be too deep; girder decks on piers, portals, water surfaces | M1 | done | spans found by the terrain builder, drawn by render.rs |
 | Chunked heightfield with LOD | M4 | planned | |
 | Strata columns: excavation cost, slope limits, fill usability, bearing | M4 | planned | |
 | Cut/fill estimate for a proposed alignment; mass-haul | M4 | planned | |
@@ -169,15 +171,17 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Debug-line rendering of track and cars | M0 | done | boxes and procedural track meshes |
 | LOD: polyline, instanced boxes, low-poly meshes | M3 | planned | |
 | 3D overhead camera with tilt and zoom | M1 | done | ADR-0006 |
-| Track spline meshes in dirty-chunk rebuild | M1 | wip | built once at startup |
+| Track spline meshes in dirty-chunk rebuild | M1 | wip | ballast prism, tie boxes and rail sections with true normals; rebuilt whole on scenario change, not per dirty chunk |
 | Audio event pipeline: culling, voice caps, distance merge | M1 | done | bevy_audio, synthesized placeholders |
+| Diesel prime mover: seamless idle and load loops of firing pulses, blended and pitched by a smoothed rpm | M1 | done | a test holds the loops seam-free and unclipped |
 | Flange squeal, rumble, horn and bell | M3 | planned | |
 | Particles: notch-up puff, brake smoke, dust, wreck smoke | later | planned | hanabi |
 | egui tool UI: schedules, manifests, interlocking, estimates | M3 | wip | consist, yard, switches, selection, score |
 | Display unit setting: SI or US customary | M0 | done | |
 | Single palette texture and unified WGSL material | M1 | planned | art.md |
-| Procedural car meshes generated from car-model parameters | M1 | planned | |
-| Procedural track meshes along splines | M1 | planned | |
+| Procedural car meshes generated from car-model parameters | M1 | wip | chamfered bodies, three-piece trucks with faceted wheels, couplers, end caps and per-type fittings sized from the car box; profiles and LODs to come |
+| Procedural track meshes along splines | M1 | done | profile extrusions along graph edges |
+| Sun with cascaded shadows, gradient-cube hemisphere light, ambient occlusion, SMAA, distance fog scaled to the zoom | M1 | done | light.rs; stands in for the custom material |
 | Schematic map layer at far zoom: constant-width lines, true-length train strokes, fixed-pixel icons | M3 | planned | |
 | Exaggerated coupler gap rendering, tunable factor | M0 | planned | slack must read |
 | Strata bands on terrain cut faces | M4 | planned | |
@@ -196,7 +200,7 @@ Milestones are defined in [goals.md](goals.md). Update this file in the same cha
 | Walking time and crew skill | M3 | idea | crew.md |
 | Dispatcher: road trains in and out through a portal, yard master assigning hump and sort jobs | M3 | done | traffic.rs; one road train at a time |
 | Terminal scenario runs unaided end to end as a test | M3 | done | inbound, hump, sort, load, unload, departure |
-| In-app screenshot hook: `HAT_SCREENSHOT=path` saves a frame after a few seconds and exits | M3 | done | works with the display asleep; for scripts and CI |
+| In-app screenshot hook: `HAT_SCREENSHOT=path` saves a frame after a few seconds and exits; `HAT_CAMERA` frames it | M3 | done | works with the display asleep; for scripts and CI |
 | Asset manifest with placeholder flag and provenance; lineup sheet highlights placeholders | M1 | planned | art.md |
 | Normalization script: fit to sim box, flat facets, palette quantize, LODs | M1 | planned | Blender headless or Rust |
 | Placeholder mesh batch generation from a prompt list via hosted 3D generator | M1 | planned | |

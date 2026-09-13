@@ -85,6 +85,10 @@ SVG, then either rasterize per DPI or triangulate to meshes for scale-invariant 
 **Shading does most of the work.** A custom Bevy material in WGSL: palette lookup, flat
 normals, a two- or three-step ramp, hemisphere light, cheap edge darkening. An optional
 screen-space outline pass at mid zoom. Desaturation and height fog rise with camera height.
+Until that material exists the standard material carries the look: a raking sun with
+cascaded shadows, a generated gradient cubemap as the hemisphere light, screen-space ambient
+occlusion to seat things on the ground, and distance fog whose visibility scales with camera
+distance so the far edge of every view recedes a little.
 
 **Generators, for placeholders and more.** Anything that gets a stand-in from a generator
 today is something the sim can be tested against today. Output never goes in raw. See the

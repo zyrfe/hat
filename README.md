@@ -6,7 +6,7 @@ real logistics and engineering trade-offs. Rust on Bevy.
 Design docs live in `docs/`. Code is a Cargo workspace under `crates/`. Four scenarios are
 playable: Yard Shift, Doubling, the Terminal with its main-line loop, hump and road
 traffic (the default), and the Branch, an open-country loop with industries, scheduled
-trains and money.
+trains and money, a spiral over a ridge and a bridged river.
 
 
 ## Docs
@@ -45,8 +45,10 @@ cargo run -p hat_app --features dev     # fast-iteration build with dynamic link
 Press F1 in the game for controls. M toggles Manual: in Auto the crew drives and WASD pans
 the map; in Manual the keys drive. Drag the ground or click the minimap to move around. `HAT_SCREENSHOT=out.png cargo run --release -p hat_app`
 saves one frame and exits, for quick visual checks from a script; it also writes `out.cab.png`
-from the cab camera, which renders offscreen and stays valid while the display sleeps.
-`HAT_SCENARIO=0|1|2|3` picks the starting scenario; 3 is the Branch.
+from the cab camera. Both cameras render offscreen in that mode, so the frames are valid while
+the display sleeps.
+`HAT_SCENARIO=0|1|2|3` picks the starting scenario; 3 is the Branch. `HAT_CAMERA=x,y,distance[,yaw,pitch]`
+frames the shot, in sim metres and degrees.
 
 ## Conventions
 

@@ -5,8 +5,10 @@ mod cab;
 mod debug;
 mod camera;
 mod input;
+mod light;
 mod render;
 mod sim;
+mod terrain;
 mod ui;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
@@ -16,7 +18,7 @@ use bevy_egui::EguiPlugin;
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::srgb(0.09, 0.10, 0.09)))
+        .insert_resource(ClearColor(light::SKY))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "HAT: Huge-Ass Trains".into(),
@@ -29,6 +31,6 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(EguiPlugin::default())
         .insert_resource(Time::<Fixed>::from_hz(120.0))
-        .add_plugins((sim::SimPlugin, camera::CameraPlugin, render::RenderPlugin, input::InputPlugin, ui::UiPlugin, audio::AudioPlugin, cab::CabPlugin, debug::DebugPlugin))
+        .add_plugins((sim::SimPlugin, camera::CameraPlugin, render::RenderPlugin, light::LightPlugin, input::InputPlugin, ui::UiPlugin, audio::AudioPlugin, cab::CabPlugin, debug::DebugPlugin))
         .run();
 }

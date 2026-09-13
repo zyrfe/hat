@@ -48,7 +48,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut textures
     let tex = textures.add_image(EguiTextureHandle::Strong(image.clone()));
     commands.spawn((
         Camera3d::default(),
-        Camera { order: -1, clear_color: ClearColorConfig::Custom(Color::srgb(0.10, 0.12, 0.10)), ..default() },
+        Camera { order: -1, clear_color: ClearColorConfig::Custom(crate::light::SKY), ..default() },
         RenderTarget::from(image.clone()),
         Projection::Perspective(PerspectiveProjection { fov: 50f32.to_radians(), near: 0.3, far: 6000.0, ..default() }),
         Transform::from_xyz(0.0, 20.0, 40.0).looking_at(Vec3::ZERO, Vec3::Y),

@@ -264,6 +264,7 @@ pub fn build_terminal(p: &TerminalParams) -> (TrackGraph, Yard) {
         receiving: Some((TRACK_RECEIVING, wr, er)),
         hump: Some(Hump { turnout: thump, climb, crest, descent, bowl: 1 }),
         departure: Some(TRACK_DEPARTURE),
+        landforms: Vec::new(),
     };
     let _ = portal_edge;
     (g, yard)

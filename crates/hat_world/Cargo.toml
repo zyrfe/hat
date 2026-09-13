@@ -8,4 +8,4 @@ description = "HAT world building: yards, scenarios, scoring"
 [dependencies]
 hat_units = { workspace = true }
 hat_sim = { workspace = true }
-glam = "0.33"
+glam = { workspace = true }

@@ -31,8 +31,10 @@ loaded, unloaded and sent out as a departure. Take the levers whenever you like.
 
 The Branch is the third world and the first with money: one loop with a mine, a power plant,
 three elevators and a harbour, two trains on schedules, a switcher in the yard, and a
-ledger. Shippers pay the trucking alternative; you pay for fuel, crews, cars, track and
-wrecks. Derailments are recovered by calling the wreck crew. See [economy.md](economy.md).
+ledger. Its east end climbs a spiral around a knoll and cuts through a ridge; a river
+crosses the west end under two bridges. Shippers pay the trucking alternative; you pay for
+fuel, crews, cars, track and wrecks. Derailments are recovered by calling the wreck crew.
+See [economy.md](economy.md).
 
 ## The loop
 

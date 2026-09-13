@@ -177,6 +177,7 @@ fn mouse_pick(
     ui: Res<UiState>,
     window: Single<&Window, With<PrimaryWindow>>,
     cam: Single<(&Camera, &GlobalTransform), With<MainCamera>>,
+    hf: Option<Res<crate::terrain::Heightfield>>,
     rig: Res<Rig>,
     mut sim: ResMut<Sim>,
     mut sel: ResMut<Selection>,
@@ -186,7 +187,7 @@ fn mouse_pick(
         return;
     }
     let (camera, tf) = *cam;
-    let Some(hit) = cursor_ground(&window, camera, tf) else { return };
+    let Some(hit) = cursor_ground(&window, camera, tf, hf.as_deref()) else { return };
     let p = world_to_sim(hit);
     let scale = (rig.distance as f64 / 300.0).max(1.0);
     let mut best: Option<(f64, Pick)> = None;

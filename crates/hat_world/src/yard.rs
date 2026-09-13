@@ -79,6 +79,17 @@ pub struct Hump {
     pub bowl: usize,
 }
 
+/// Ground shapes a world asks the terrain for. The heightfield is a render-side stand-in
+/// until ADR-0007; these give it hills to climb and rivers to bridge. Metres, sim plane.
+#[derive(Clone, Debug)]
+pub enum Landform {
+    /// A Gaussian mound: `height` at the centre, falling off over the axis-aligned radii.
+    Hill { center: DVec2, height: f64, radius: DVec2 },
+    /// A river along a polyline: a flat bed at `bed` above datum, `width` bank to bank,
+    /// water `depth` above the bed.
+    River { points: Vec<DVec2>, width: f64, bed: f64, depth: f64 },
+}
+
 #[derive(Clone, Debug)]
 pub struct Yard {
     pub main_west: EdgeId,
@@ -98,6 +109,7 @@ pub struct Yard {
     pub hump: Option<Hump>,
     /// Departure track for outbound trains.
     pub departure: Option<u32>,
+    pub landforms: Vec<Landform>,
 }
 
 impl Yard {
@@ -226,6 +238,7 @@ pub fn build_ladder_yard(p: &YardParams) -> (TrackGraph, Yard) {
         receiving: None,
         hump: None,
         departure: Some(1),
+        landforms: Vec::new(),
     };
     (g, yard)
 }

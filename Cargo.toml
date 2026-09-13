@@ -12,6 +12,9 @@ hat_units = { path = "crates/hat_units" }
 hat_sim = { path = "crates/hat_sim" }
 hat_world = { path = "crates/hat_world" }
 serde = { version = "1", features = ["derive"] }
+# Track the glam line Bevy uses (bevy_math 0.19 -> glam 0.32) so the build carries one
+# copy and sim math types line up with Bevy's. Bump this together with bevy.
+glam = "0.32"
 
 # Fast iteration: light optimization for our code, full for dependencies.
 [profile.dev]

@@ -7,4 +7,4 @@ description = "HAT simulation core: 1D train dynamics on a track graph. No engin
 
 [dependencies]
 hat_units = { workspace = true }
-glam = "0.33"
+glam = { workspace = true }

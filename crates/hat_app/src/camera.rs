@@ -7,6 +7,7 @@ use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::input::UiState;
 use crate::sim::Sim;
+use crate::terrain::Heightfield;
 
 pub struct CameraPlugin;
 
@@ -63,11 +64,15 @@ pub fn world_to_sim(p: Vec3) -> glam::DVec2 {
     glam::DVec2::new(p.x as f64, -(p.z as f64))
 }
 
-/// Point on the ground plane under the cursor.
-pub fn cursor_ground(window: &Window, cam: &Camera, tf: &GlobalTransform) -> Option<Vec3> {
+/// Point on the ground under the cursor: the terrain surface, or the datum plane before
+/// the terrain exists.
+pub fn cursor_ground(window: &Window, cam: &Camera, tf: &GlobalTransform, hf: Option<&Heightfield>) -> Option<Vec3> {
     let cursor = window.cursor_position()?;
     let ray = cam.viewport_to_world(tf, cursor).ok()?;
     let d = ray.direction.as_vec3();
+    if let Some(hf) = hf {
+        return hf.raycast(ray.origin, d);
+    }
     if d.y.abs() < 1e-6 {
         return None;
     }
@@ -87,10 +92,6 @@ fn setup(mut commands: Commands, rig: Res<Rig>, mut egui_settings: ResMut<EguiGl
         rig.transform(),
         MainCamera,
     ));
-    commands.spawn((
-        DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: false, ..default() },
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.7, -1.05, 0.0)),
-    ));
 }
 
 fn control(
@@ -101,6 +102,7 @@ fn control(
     time: Res<Time>,
     ui: Res<UiState>,
     sim: Res<Sim>,
+    hf: Option<Res<Heightfield>>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut rig: ResMut<Rig>,
     mut cam: Single<(&Camera, &GlobalTransform, &mut Transform), With<MainCamera>>,
@@ -109,8 +111,7 @@ fn control(
     if rig.seen_generation != Some(sim.generation) {
         rig.seen_generation = Some(sim.generation);
         let lead = sim.world.graph.node(sim.yard.lead_switch).pos;
-        let span = sim.yard.max - sim.yard.min;
-        if span.x > 6000.0 {
+        if sim.economy.is_some() {
             rig.focus = sim_to_world(0.5 * (sim.yard.min + sim.yard.max));
             rig.distance = 3200.0;
         } else if sim.yard.hump.is_some() {
@@ -121,6 +122,17 @@ fn control(
             rig.distance = 260.0;
         }
         rig.follow = false;
+        // `HAT_CAMERA=x,y,distance[,yaw_deg,pitch_deg]` in sim metres frames a screenshot.
+        if let Some(v) = std::env::var("HAT_CAMERA").ok().map(|s| s.split(',').filter_map(|t| t.trim().parse::<f32>().ok()).collect::<Vec<_>>()) {
+            if v.len() >= 3 {
+                rig.focus = sim_to_world(glam::DVec2::new(v[0] as f64, v[1] as f64));
+                rig.distance = v[2].clamp(12.0, 12_000.0);
+                if v.len() >= 5 {
+                    rig.yaw = v[3].to_radians();
+                    rig.pitch = v[4].to_radians().clamp(0.25, 1.52);
+                }
+            }
+        }
     }
     let dt = time.delta_secs();
     let pan = rig.distance * 0.9 * dt;
@@ -150,7 +162,7 @@ fn control(
     if buttons.just_pressed(MouseButton::Left) {
         rig.press_over_ui = ui.pointer_over_ui;
         rig.drag_moved = false;
-        rig.grab = if ui.pointer_over_ui { None } else { cursor_ground(&window, camera, cam_global) };
+        rig.grab = if ui.pointer_over_ui { None } else { cursor_ground(&window, camera, cam_global, hf.as_deref()) };
         rig.grab_px = window.cursor_position().unwrap_or_default();
     }
     if buttons.pressed(MouseButton::Left) {
@@ -160,7 +172,7 @@ fn control(
                 rig.drag_moved = true;
             }
             if rig.drag_moved {
-                if let Some(now) = cursor_ground(&window, camera, cam_global) {
+                if let Some(now) = cursor_ground(&window, camera, cam_global, hf.as_deref()) {
                     let mut d = grab - now;
                     d.y = 0.0;
                     rig.focus += d;

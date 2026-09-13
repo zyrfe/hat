@@ -24,6 +24,16 @@ pub const IND_PLANT: u32 = 2;
 pub const IND_ELEVATOR_BASE: u32 = 3;
 pub const IND_GRAIN_TERMINAL: u32 = 6;
 
+/// The spiral on the east end: one full turn off the south main, climbing at a grade a
+/// loaded coal train can still take with one road unit and the curve resistance on top.
+pub const SPIRAL_X: f64 = 3300.0;
+pub const SPIRAL_RADIUS: f64 = 300.0;
+pub const SPIRAL_GRADE: f64 = 0.006;
+/// Height gained by the spiral: the summit level over the ridge on the east end.
+pub fn summit() -> f64 {
+    std::f64::consts::TAU * SPIRAL_RADIUS * SPIRAL_GRADE
+}
+
 #[derive(Clone, Debug)]
 pub struct BranchParams {
     pub half_len: f64,
@@ -174,6 +184,8 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
         Siding { straight: f64, track: u32, name: String },
         YardWest,
         YardEast,
+        /// One full climbing turn; the main continues at the summit level after it.
+        Spiral,
     }
     let mut south: Vec<(f64, Stop)> = vec![(-h, Stop::Plain("W arc end"))];
     let mut x = -4000.0;
@@ -185,6 +197,7 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
     south.push((-1200.0, Stop::YardWest));
     south.push((-200.0, Stop::YardEast));
     south.push((600.0, Stop::Siding { straight: 1200.0, track: TRACK_MINE, name: "Mine".into() }));
+    south.push((SPIRAL_X, Stop::Spiral));
     south.push((h, Stop::Plain("E arc start")));
 
     // Lay the south main nodes and edges.
@@ -197,15 +210,27 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
     let mut laid: Vec<Laid> = Vec::new();
     let mut prev: Option<NodeId> = None;
     let mut main_edges: Vec<EdgeId> = Vec::new();
+    // Rail height of the main as it is laid; the spiral lifts it to the summit.
+    let mut z_main = 0.0;
     let link = |g: &mut TrackGraph, prev: &mut Option<NodeId>, n: NodeId, main_edges: &mut Vec<EdgeId>, speed: f64| {
         if let Some(pn) = *prev {
             let geom = Geometry::Straight { a: g.node(pn).pos, b: g.node(n).pos };
-            main_edges.push(g.add_edge(pn, n, geom, 0.0, speed, Some(TRACK_MAIN)));
+            main_edges.push(g.add_edge_graded(pn, n, geom, speed, Some(TRACK_MAIN)));
         }
         *prev = Some(n);
     };
     for (x, stop) in south.iter().cloned() {
         match &stop {
+            Stop::Spiral => {
+                let s0 = g.add_node_z(DVec2::new(x, 0.0), z_main, NodeKind::Plain, "Spiral foot");
+                link(&mut g, &mut prev, s0, &mut main_edges, p.main_speed);
+                z_main += summit();
+                let s1 = g.add_node_z(DVec2::new(x, 0.0), z_main, NodeKind::Plain, "Spiral top");
+                let turn = Geometry::arc_from(Pose::new(x, 0.0, 0.0), SPIRAL_RADIUS, std::f64::consts::TAU);
+                main_edges.push(g.add_edge_graded(s0, s1, turn, p.arc_speed, Some(TRACK_MAIN)));
+                prev = Some(s1);
+                laid.push(Laid { node: s1, stop: stop.clone(), node2: None });
+            }
             Stop::Siding { straight, name, .. } => {
                 let wr = g.add_node(DVec2::new(x, 0.0), NodeKind::Plain, format!("{name} W"));
                 link(&mut g, &mut prev, wr, &mut main_edges, p.main_speed);
@@ -214,7 +239,7 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
                 laid.push(Laid { node: wr, stop: stop.clone(), node2: Some(er) });
             }
             Stop::Plain(name) => {
-                let n = g.add_node(DVec2::new(x, 0.0), NodeKind::Plain, *name);
+                let n = g.add_node_z(DVec2::new(x, 0.0), z_main, NodeKind::Plain, *name);
                 link(&mut g, &mut prev, n, &mut main_edges, p.main_speed);
                 laid.push(Laid { node: n, stop: stop.clone(), node2: None });
             }
@@ -309,14 +334,15 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
 
     // East arc up, north main west with its sidings, west arc down.
     let east_arc = Geometry::arc_from(Pose::new(h, 0.0, 0.0), r, PI);
-    let n_e = g.add_node(east_arc.end().pos, NodeKind::Plain, "N east");
-    g.add_edge(e_arc_start, n_e, east_arc, 0.0, p.arc_speed, Some(TRACK_MAIN));
+    let n_e = g.add_node_z(east_arc.end().pos, summit(), NodeKind::Plain, "N east");
+    g.add_edge_graded(e_arc_start, n_e, east_arc, p.arc_speed, Some(TRACK_MAIN));
     let north: Vec<(f64, f64, u32, &str)> = vec![(2800.0, 1200.0, TRACK_PLANT, "Power plant"), (-400.0, 600.0, TRACK_GRAIN_TERMINAL, "Grain terminal"), (-2000.0, 500.0, TRACK_INTERCHANGE, "Interchange")];
     let mut prev_n = n_e;
     let mut north_nodes: Vec<(NodeId, NodeId, f64, u32, &str)> = Vec::new();
     for (x, straight, track, name) in north {
         let wr = g.add_node(DVec2::new(x, ytop), NodeKind::Plain, format!("{name} E"));
-        g.add_edge(prev_n, wr, Geometry::Straight { a: g.node(prev_n).pos, b: DVec2::new(x, ytop) }, 0.0, p.main_speed, Some(TRACK_MAIN));
+        // The first leg comes down off the summit; the rest is level.
+        g.add_edge_graded(prev_n, wr, Geometry::Straight { a: g.node(prev_n).pos, b: DVec2::new(x, ytop) }, p.main_speed, Some(TRACK_MAIN));
         let er = g.add_node(DVec2::new(x - 2.0 * span - straight, ytop), NodeKind::Plain, format!("{name} W"));
         g.add_edge(wr, er, Geometry::Straight { a: DVec2::new(x, ytop), b: g.node(er).pos }, 0.0, p.main_speed, Some(TRACK_MAIN));
         north_nodes.push((wr, er, straight, track, name));
@@ -376,6 +402,18 @@ pub fn build_branch(p: &BranchParams) -> BranchWorld {
         receiving: None,
         hump: None,
         departure: Some(1),
+        landforms: vec![
+            // The ridge the east end climbs over, and the knoll the spiral winds around.
+            Landform::Hill { center: DVec2::new(h + 150.0, r), height: 19.0, radius: DVec2::new(450.0, 1500.0) },
+            Landform::Hill { center: DVec2::new(SPIRAL_X, SPIRAL_RADIUS), height: 14.0, radius: DVec2::new(320.0, 320.0) },
+            // A river across the west end, bridged by both mains.
+            Landform::River {
+                points: vec![DVec2::new(-3330.0, -1200.0), DVec2::new(-3290.0, -400.0), DVec2::new(-3278.0, 0.0), DVec2::new(-3262.0, 400.0), DVec2::new(-3240.0, ytop), DVec2::new(-3200.0, ytop + 800.0)],
+                width: 140.0,
+                bed: -9.5,
+                depth: 3.0,
+            },
+        ],
     };
     BranchWorld { graph: g, yard, industries }
 }
@@ -415,7 +453,41 @@ mod tests {
         let to_plant = route(g, mine, true, 800.0, plant, &|_| 0.0).expect("mine to plant");
         let back = route(g, plant, true, 800.0, mine, &|_| 0.0).expect("plant to mine");
         eprintln!("yard->mine {:.0} m, mine->plant {:.0} m, plant->mine {:.0} m", to_mine.length, to_plant.length, back.length);
-        assert!(to_mine.length < 3000.0 && to_plant.length < 6000.0 && back.length > 8000.0);
+        assert!(to_mine.length < 3000.0 && to_plant.length < 7800.0 && back.length > 8000.0);
+        // The spiral climbs to the summit and the north main comes back down to the plant.
+        let top = g.nodes.iter().find(|n| n.name == "Spiral top").unwrap();
+        assert!((top.z - summit()).abs() < 1e-9 && summit() > 10.0 && summit() < 12.0, "summit {}", summit());
+        let plant_e = g.nodes.iter().find(|n| n.name == "Power plant E").unwrap();
+        assert_eq!(plant_e.z, 0.0);
+    }
+
+    /// The loaded coal train, one road unit and thirty full hoppers, must climb the spiral
+    /// from a standing start: grade and curve resistance together stay inside adhesion.
+    #[test]
+    fn a_loaded_coal_train_climbs_the_spiral() {
+        let b = build_branch(&BranchParams::default());
+        let foot = b.graph.nodes.iter().position(|n| n.name == "Spiral foot").unwrap() as NodeId;
+        let spiral = *b.graph.node(foot).edges.iter().find(|&&e| matches!(b.graph.edge(e).geom, Geometry::Arc { .. })).unwrap();
+        let mut w = World::new(b.graph);
+        let by_name = |w: &World, name: &str| w.car_types.iter().position(|t| t.name == name).unwrap() as CarTypeId;
+        let (unit, hopper) = (by_name(&w, "Road unit"), by_name(&w, "Open hopper"));
+        let mut cars = vec![w.new_car(unit)];
+        for _ in 0..30 {
+            let mut c = w.new_car(hopper);
+            c.m_payload = w.car_types[hopper as usize].m_payload_max;
+            cars.push(c);
+        }
+        let id = w.spawn_train(cars, spiral, 650.0, true).expect("train fits on the spiral");
+        w.set_controls(id, Controls { throttle: 8, reverser: Reverser::Forward, independent: 0.0, ..Default::default() });
+        let dt = 1.0 / 120.0;
+        let mut vmax = 0.0f64;
+        for _ in 0..(180.0 / dt) as usize {
+            w.step(dt);
+            vmax = vmax.max(w.train(id).unwrap().speed(&w.car_types));
+        }
+        let v = w.train(id).unwrap().speed(&w.car_types);
+        eprintln!("spiral climb: vmax {vmax:.2} m/s, after 180 s {v:.2} m/s");
+        assert!(vmax > 2.0 && v > 1.5, "the coal train stalls on the spiral: vmax {vmax:.2}, v {v:.2}");
     }
 }
 
